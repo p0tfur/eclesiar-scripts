@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eclesiar Scripts - Narzędzia dla graczy</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script
+      defer
+      src="https://umami.rpaby.pw/script.js"
+      data-website-id="854658a4-7104-4f30-823a-53072c724feb"
+    ></script>
+    <style>
+      body {
+        background-image: url('avatar.PNG');
+        background-size: cover;
+        background-position: center;
+        background-attachment: fixed;
+        min-height: 100vh;
+        font-family: 'Georgia', serif;
+      }
+      body::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: -1;
+      }
+      .script-card {
+        background: rgba(20, 20, 20, 0.95);
+        backdrop-filter: blur(10px);
+        border: 2px solid rgba(139, 69, 19, 0.5);
+        border-radius: 16px;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+        transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+      }
+      .script-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+        border-color: rgba(205, 133, 63, 0.8);
+      }
+      .download-btn {
+        background: #842214;
+        transition: all 0.3s ease;
+        border: 1px solid #654321;
+      }
+      .download-btn:hover {
+        background: #a0522d;
+        transform: scale(1.01);
+        box-shadow: 0 0 15px rgba(139, 69, 19, 0.6);
+      }
+      .gothic-text {
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), 0 0 10px rgba(139, 69, 19, 0.5);
+        font-family: 'Georgia', serif;
+      }
+      .script-card h3 {
+        color: #ffffff !important;
+        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+      }
+      .script-card p {
+        color: #e5e7eb !important;
+        text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.7);
+      }
+      /* Gothic easter eggs */
+      .lore-quote {
+        color: #f5f5f4;
+        font-size: 0.95rem;
+        font-style: italic;
+        opacity: 0.95;
+        text-shadow: 2px 2px 6px rgba(0, 0, 0, 0.9);
+      }
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+        justify-content: center;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 8px;
+        font-size: 11px;
+        border-radius: 999px;
+        border: 1px solid rgba(139, 69, 19, 0.5);
+        background: rgba(30, 30, 30, 0.8);
+        color: #f3f4f6;
+        box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
+      }
+      .chip .ico {
+        filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+      }
+      .hr-runic {
+        height: 1px;
+        width: 100%;
+        background: linear-gradient(90deg, transparent, rgba(139, 69, 19, 0.8), transparent);
+        margin: 14px 0 6px 0;
+      }
+      .gothic-card-light {
+        background: rgba(10, 10, 10, 0.5);
+        backdrop-filter: blur(8px);
+        border: 2px solid rgba(139, 69, 19, 0.3);
+        border-radius: 12px;
+      }
+      .gothic-card {
+        background: rgba(10, 10, 10, 0.8);
+        backdrop-filter: blur(12px);
+        border: 2px solid rgba(139, 69, 19, 0.5);
+        border-radius: 12px;
+      }
+    </style>
+  </head>
+  <body class="font-sans text-gray-800">
+    <div class="container mx-auto px-4 py-8">
+      <!-- Header -->
+      <header
+        class="text-center mb-12 gothic-card p-4 relative"
+        style="
+          background-image: url('witamy.jpeg');
+          background-size: auto;
+          background-position: center;
+          background-repeat: no-repeat;
+        "
+      >
+        <h1
+          class="text-4xl md:text-6xl font-bold text-white mb-4 gothic-text inline-block px-4 py-2 rounded"
+          style="background: rgba(0, 0, 0, 0.3)"
+        >
+          Witamy w Ko... Eclesiar Scripts by
+          <a href="https://eclesiar.com/user/11062" target="_blank" style="color: #842214"
+            >p0tfur</a
+          >
+        </h1>
+        <p
+          class="text-xl text-white/90 max-w-2xl mx-auto inline-block px-4 py-2 rounded"
+          style="background: rgba(0, 0, 0, 0.3)"
+        >
+          Samoaktualizujące się skrypty Tampermonkey dla gry Eclesiar.
+        </p>
+        <div class="hr-runic"></div>
+        <p class="lore-quote max-w-3xl mx-auto" style="background: rgba(0, 0, 0, 0.3)">
+          "Powiedzmy sobie szczerze. Przyszedłeś tu tylko dlatego, żeby móc pocałować Gomeza w dupę"
+          — Kharim.
+        </p>
+      </header>
+
+      <!-- Scripts Grid -->
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8 mb-12">
+        <!-- Eclesiar Market & Auctions -->
+        <div class="script-card p-6">
+          <div class="text-center mb-4">
+            <div
+              class="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-3"
+            >
+              <span class="text-2xl">🏛️</span>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Market & Auctions</h3>
+            <span
+              class="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-medium"
+            >
+              v1.2.0
+            </span>
+          </div>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">
+            Ułatwia zakupy na rynku poprzez wyświetlanie flag narodowości sprzedawców obok ich nazw
+            (zarówno gracze, jak i holdingi - wtedy flaga jest flagą właściciela holdingu). Dla
+            aukcji dodaje specjalne wskaźniki cenowe, które pokazują, czy aktualna oferta jest
+            korzystna w porównaniu do średnich cen z 7 dni.
+          </p>
+          <a
+            href="https://24na7.info/eclesiar-scripts/Eclesiar%20Market%20&%20Auctions.user.js"
+            class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
+          >
+            📥 Pobierz skrypt
+          </a>
+          <div class="chip-row">
+            <span class="chip"><span class="ico">🛡️</span>"A to ci niespodzianka!"</span>
+            <span class="chip"><span class="ico">🧱</span>Cecha: Targowanie jak u Bospera</span>
+            <span class="chip"><span class="ico">💰</span>Rynek jak w Khorinis</span>
+          </div>
+        </div>
+
+        <!-- Eclesiar Misc Additions -->
+        <div class="script-card p-6">
+          <div class="text-center mb-4">
+            <div
+              class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-3"
+            >
+              <span class="text-2xl">⚙️</span>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Misc Additions</h3>
+            <span
+              class="inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-medium"
+            >
+              v1.2.5
+            </span>
+          </div>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">
+            Dodaje wiele usprawnień do codziennej rozgrywki: dodaje opcję zmiany ekwipunku w widoku
+            budowy oraz kopalni, pokazuje czas do pełnego uzupełnienia energii i jedzenia, dodaje
+            opcję Cedrowania przy łączeniu przedmiotów, wyświetla obie rangi (wojskową i budowlaną)
+            oraz dodaje menu "Moje transakcje".
+          </p>
+          <a
+            href="https://24na7.info/eclesiar-scripts/Eclesiar%20Misc%20Additions.user.js"
+            class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
+          >
+            📥 Pobierz skrypt
+          </a>
+          <div class="chip-row">
+            <span class="chip"><span class="ico">🔥</span>Bezimienny approved</span>
+          </div>
+        </div>
+
+        <!-- Eclesiar Training Center Plus -->
+        <div class="script-card p-6">
+          <div class="text-center mb-4">
+            <div
+              class="w-16 h-16 bg-purple-500 rounded-full flex items-center justify-center mx-auto mb-3"
+            >
+              <span class="text-2xl">💪</span>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Training Center Plus</h3>
+            <span
+              class="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full font-medium"
+            >
+              v1.2.1
+            </span>
+          </div>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">
+            Poprawia centrum treningowe poprzez dodanie panelu ustawień z opcjami
+            włączania/wyłączania funkcji, alternatywnego widoku tabeli dla statystyk sprzętu,
+            kolorowych obramowań dla najlepszego sprzętu (perf equipment), filtrów do wyszukiwania
+            sprzętu oraz przeniesienie przycisku trenowania w wygodniejsze miejsce.
+          </p>
+          <a
+            href="https://24na7.info/eclesiar-scripts/Eclesiar%20Training%20Center.user.js"
+            class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
+          >
+            📥 Pobierz skrypt
+          </a>
+          <div class="chip-row">
+            <span class="chip"><span class="ico">💪</span>+10 do siły (po zupie z ryżu)</span>
+            <span class="chip"><span class="ico">🏹</span>Diego mówi: celuj w głowę</span>
+            <span class="chip"><span class="ico">🥋</span>Szkoła Lee - plan treningu na tacy</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Installation Instructions -->
+      <div class="gothic-card-light p-6 mb-8">
+        <h2 class="text-2xl font-bold text-white mb-4 text-center gothic-text">
+          Jak zainstalować?
+        </h2>
+        <div class="grid md:grid-cols-2 gap-6 text-white/90">
+          <div>
+            <h3 class="font-semibold mb-2 gothic-text">1. Zainstaluj Tampermonkey</h3>
+            <p class="text-sm">
+              Jeśli nie masz jeszcze zainstalowanego, pobierz rozszerzenie Tampermonkey dla swojej
+              przeglądarki:
+            </p>
+            <ul class="text-sm mt-2 space-y-1">
+              <li>
+                • Firefox:
+                <a
+                  href="https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/"
+                  class="text-blue-300 hover:text-blue-200 underline"
+                  >z Firefox Add-ons</a
+                >
+              </li>
+              <li>
+                • Chrome:
+                <a
+                  href="https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo"
+                  class="text-blue-300 hover:text-blue-200 underline"
+                  >z Chrome Web Store</a
+                >
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h3 class="font-semibold mb-2 gothic-text">2. Zainstaluj skrypt</h3>
+            <p class="text-sm">
+              Kliknij przycisk "Pobierz skrypt" powyżej. Tampermonkey automatycznie rozpozna plik i
+              zapyta o instalację. Potwierdź instalację.
+            </p>
+            <p class="text-sm mt-2">
+              <strong>Gotowe!</strong> Skrypt będzie działał automatycznie na stronie Eclesiar.
+            </p>
+          </div>
+          <p>
+            Wszystkie skrypty testowane są na PC oraz Firefox. Ewentualne bugi proszę zgłaszać na
+            Discord.
+          </p>
+        </div>
+      </div>
+
+      <!-- Changelog Placeholder -->
+      <div class="gothic-card-light p-6">
+        <h2 class="text-2xl font-bold text-white mb-4 text-center gothic-text">Historia zmian</h2>
+        <p class="text-white/90 text-center">
+          Szczegółowe informacje o zmianach w każdej wersji będą publikowane na bieżąco.
+        </p>
+      </div>
+
+      <!-- Smaczki z Kolonii -->
+      <div class="gothic-card-light p-6 mt-6">
+        <h2 class="text-2xl font-bold text-white mb-3 text-center gothic-text">
+          Smaczki z Kolonii
+        </h2>
+        <div class="hr-runic"></div>
+        <ul class="text-sm text-white/90 space-y-2 text-center max-w-3xl mx-auto">
+          <li>
+            • „Nie ma takiego bicia” — ale na aukcji zawsze ktoś przebije. Za przebicie obcokrajowca
+            punkty gratis.
+          </li>
+          <li>
+            • Ryż z Górniczej Doliny poprawia skupienie przy przeglądaniu ofert. A Eclesiar Market &
+            Auctions pomaga, aby nie kupić od Araba.
+          </li>
+          <li>
+            • Diego poleca: zanim kupisz, sprawdź średnią cenę z 7 dni. Teraz jeszcze łatwiej dzięki
+            Eclesiar Market & Auctions.
+          </li>
+          <li>
+            • U kowala usłyszysz: „Masz rudę?” — u nas: „Masz golda?” Jak tak to
+            <a
+              href="https://eclesiar.com/user/11062"
+              class="text-blue-300 hover:text-blue-200 underline"
+              >wyślij!</a
+            >
+          </li>
+        </ul>
+      </div>
+
+      <!-- Footer -->
+      <footer class="text-center mt-12 text-white/70 text-sm">
+        <p>
+          © 2025 p0tfur | Stworzone z ❤️ do
+          <a href="PFA-soldier.png" class="text-blue-300 hover:text-blue-200 underline">PFA</a> i
+          całej społeczności graczy | Licencja:
+          <a href="license.md" class="text-blue-300 hover:text-blue-200 underline"
+            >CC BY-NC-SA 4.0</a
+          >
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>
