@@ -155,13 +155,19 @@
             </div>
             <h3 class="text-xl font-bold text-gray-800 mb-2">Market & Auctions</h3>
             <span class="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-medium">
-              v1.2.6
+              v1.2.9
             </span>
           </div>
           <p class="text-gray-600 mb-4 text-sm leading-relaxed">
             Ułatwia zakupy poprzez wyświetlanie flag narodowości sprzedawców obok ich nazw (zarówno gracze, jak i
             holdingi - wtedy flaga jest flagą właściciela holdingu). Dla aukcji dodaje specjalne wskaźniki cenowe, które
-            pokazują, czy aktualna oferta jest korzystna w porównaniu do średnich cen z 7 dni.
+            pokazują, czy aktualna oferta jest korzystna w porównaniu do średnich cen z 7 dni (<span
+              class="text-[#facc15]"
+            >
+              ━</span
+            >
+            w zakresie +/- 10%, <span class="text-[#dc2626]">▲</span> powyżej,
+            <span class="text-[#16a34a]">▼</span> poniżej).
           </p>
           <a
             href="https://24na7.info/eclesiar-scripts/Eclesiar%20Market%20&%20Auctions.user.js"
@@ -287,7 +293,20 @@
               Eclesiar Market &amp; Auctions
             </h3>
             <ul class="space-y-2 text-sm">
-              <li class="text-center">1.2.6</li>
+              <li class="text-center font-semibold">1.2.9</li>
+              <ul class="space-y-2 text-sm">
+                <li>
+                  <span class="ico">-</span> ograniczono pokazywanie banneru "Kupuj polskie..." do "General Market".
+                </li>
+                <li><span class="ico">+</span> zwiększono cache flag userów do 72h.</li>
+                <li>
+                  <span class="ico">-</span> w "Currency Market" ograniczono wyświetlanie flag pierwszych 10 wierszy,
+                  aby zapobiec częstym błędom "429" (limit zapytań).
+                </li>
+              </ul>
+            </ul>
+            <ul class="space-y-2 text-sm">
+              <li class="text-center font-semibold">1.2.6</li>
               <ul class="space-y-2 text-sm">
                 <li><span class="ico">+</span> flagi narodowości sprzedającego również na rynek walutowy.</li>
                 <li>
