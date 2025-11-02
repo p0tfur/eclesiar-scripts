@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Market - Show Seller/holding Country Flag
 // @namespace    https://eclesiar.com/
-// @version      1.2.6
+// @version      1.2.9
 // @description  Show nationality flag next to seller name on /market (users and holdings via CEO), for auctions added indicators for average prices
 // @author       p0tfur
 // @match        https://eclesiar.com/market*
@@ -22,10 +22,11 @@ Display depending on the situation:
   "use strict";
 
   const CACHE_KEY = "ec_market_flags_cache_v1";
-  const CACHE_TTL_MS = 48 * 60 * 60 * 1000; // 48h
+  const CACHE_TTL_MS = 72 * 60 * 60 * 1000; // 72h
   const MAX_CONCURRENCY = 4;
 
   const cache = loadCache();
+  const IS_MAIN_MARKET_PAGE = location.pathname === "/market";
 
   // Detect auction pages to disable certain UI injections (like [G]/[H] badges)
   const IS_AUCTION_PAGE =
@@ -87,6 +88,7 @@ Display depending on the situation:
 
   // Insert motivational banner above the quality selection row
   function insertMotivationBanner(root = document) {
+    if (!IS_MAIN_MARKET_PAGE) return;
     if (root.querySelector(".ec-pl-banner")) return;
 
     // Prefer placing at the very top of the main market list container when present
@@ -517,7 +519,10 @@ Display depending on the situation:
   }
 
   function scanAndInject(root = document) {
-    const anchors = findSellerAnchors(root).filter((a) => !alreadyInjected(a) && a.dataset.ecFlagPending !== "1");
+    let anchors = findSellerAnchors(root).filter((a) => !alreadyInjected(a) && a.dataset.ecFlagPending !== "1");
+    if (IS_CURRENCY_MARKET_PAGE) {
+      anchors = anchors.slice(0, 10);
+    }
     if (anchors.length) {
       processAnchors(anchors);
     }
