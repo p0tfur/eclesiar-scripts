@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Eclesiar Misc Additions
 // @namespace http://tampermonkey.net/
-// @version 1.2.9
+// @version 1.3.0
 // @description Fixed mission indicator, improved UX for energy and food indicators, added auto language detection and Polish translation, added EQ presets to build/mine views
 // @author p0tfur, based on script by ms05 + SirManiek
 // @match https://eclesiar.com/*
@@ -1110,9 +1110,10 @@ const CEDRU_VERSION = true;
       const sec = Math.floor(diff / 1000);
       const h = Math.floor(sec / 3600);
       const m = Math.floor((sec % 3600) / 60);
-      const s = sec % 60;
-      if (h > 0) return `${h}h ${m}m ${s}s`;
-      if (m > 0) return `${m}m ${s}s`;
+      const s = String(sec % 60).padStart(2, "0");
+      const mm = String(m).padStart(2, "0");
+      if (h > 0) return `${h}h ${mm}m ${s}s`;
+      if (m > 0) return `${mm}m ${s}s`;
       return `${s}s`;
     } catch {
       return "";
@@ -1121,9 +1122,9 @@ const CEDRU_VERSION = true;
 
   function getLocale() {
     try {
-      return LANGUAGE === "pl" ? "pl-PL" : "en-US";
+      return LANGUAGE === "pl" ? "pl-PL" : "en-GB";
     } catch {
-      return "en-US";
+      return "en-GB";
     }
   }
 
@@ -1475,9 +1476,10 @@ const CEDRU_VERSION = true;
           const s = Math.max(0, Math.floor(sec));
           const h = Math.floor(s / 3600);
           const m = Math.floor((s % 3600) / 60);
-          const ss = s % 60;
-          if (h > 0) return `${h}h ${m}m ${ss}s`;
-          if (m > 0) return `${m}m ${ss}s`;
+          const mm = String(m).padStart(2, "0");
+          const ss = String(s % 60).padStart(2, "0");
+          if (h > 0) return `${h}h ${mm}m ${ss}s`;
+          if (m > 0) return `${mm}m ${ss}s`;
           return `${ss}s`;
         };
         const nowMs = Date.now();
