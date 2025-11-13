@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Market - Show Seller/holding Country Flag
 // @namespace    https://eclesiar.com/
-// @version      1.2.9
+// @version      1.3.0
 // @description  Show nationality flag next to seller name on /market (users and holdings via CEO), for auctions added indicators for average prices
 // @author       p0tfur
 // @match        https://eclesiar.com/market*
@@ -77,10 +77,18 @@ Display depending on the situation:
   }
 
   function findSellerAnchors(root = document) {
-    const selectors = ['td.column-1 a[href^="/user/"], td.column-1 a[href^="/holding/"]'];
+    const selectors = [
+      'td.column-1 a[href^="/user/"]',
+      'td.column-1 a[href^="/holding/"]',
+      'td.column-1 a[href^="/militaryunit/"]'
+    ];
 
     if (IS_CURRENCY_MARKET_PAGE) {
-      selectors.push('td.column-0 a[href^="/user/"], td.column-0 a[href^="/holding/"]');
+      selectors.push(
+        'td.column-0 a[href^="/user/"]',
+        'td.column-0 a[href^="/holding/"]',
+        'td.column-0 a[href^="/militaryunit/"]'
+      );
     }
 
     return Array.from(root.querySelectorAll(selectors.join(", ")));
@@ -118,10 +126,11 @@ Display depending on the situation:
     banner.style.alignItems = "center";
     banner.style.justifyContent = "center";
     banner.style.boxShadow = "0 2px 6px rgba(0,0,0,0.15)";
+    banner.style.fontFamily = '"Segoe UI", "Noto Sans", Arial, sans-serif';
 
     // Add a pill with border for better text readability
     const bannerText = document.createElement("span");
-    bannerText.textContent = "Kupuj polskie, wspieraj lokalnych przedsiębiorców 🇵🇱";
+    bannerText.textContent = "Kupuj polskie, wspieraj lokalnych przedsiębiorców";
     bannerText.style.padding = "4px 10px";
     bannerText.style.border = "2px solid rgba(0,0,0,0.35)";
     bannerText.style.borderRadius = "999px";
@@ -129,7 +138,36 @@ Display depending on the situation:
     bannerText.style.color = "#111";
     bannerText.style.backdropFilter = "blur(2px)";
     bannerText.style.textShadow = "0 1px 1px rgba(255,255,255,0.6), 0 -1px 1px rgba(255,255,255,0.3)";
+    bannerText.style.fontFamily = '"Segoe UI", "Noto Sans", Arial, sans-serif';
     banner.appendChild(bannerText);
+    (function () {
+      const svgNS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("width", "24");
+      svg.setAttribute("height", "16");
+      svg.setAttribute("viewBox", "0 0 24 16");
+      svg.setAttribute("aria-label", "PL");
+      svg.setAttribute("role", "img");
+      svg.style.marginLeft = "8px";
+      svg.style.verticalAlign = "middle";
+      svg.style.border = "1px solid #333";
+      svg.style.borderRadius = "2px";
+      const top = document.createElementNS(svgNS, "rect");
+      top.setAttribute("x", "0");
+      top.setAttribute("y", "0");
+      top.setAttribute("width", "24");
+      top.setAttribute("height", "8");
+      top.setAttribute("fill", "#ffffff");
+      const bottom = document.createElementNS(svgNS, "rect");
+      bottom.setAttribute("x", "0");
+      bottom.setAttribute("y", "8");
+      bottom.setAttribute("width", "24");
+      bottom.setAttribute("height", "8");
+      bottom.setAttribute("fill", "#DC143C");
+      svg.appendChild(top);
+      svg.appendChild(bottom);
+      bannerText.appendChild(svg);
+    })();
 
     // If we found the market container, put the banner as its first child; else use qualityRow placement
     if (marketContainer) {
@@ -169,11 +207,12 @@ Display depending on the situation:
       const hrefVal = anchor.getAttribute("href") || "";
       const isHoldingLink = hrefVal.startsWith("/holding/");
       const isUserLink = hrefVal.startsWith("/user/");
-      if (!badge && (isHoldingLink || isUserLink)) {
+      const isMuLink = hrefVal.startsWith("/militaryunit/");
+      if (!badge && (isHoldingLink || isUserLink || isMuLink)) {
         badge = document.createElement("span");
         badge.className = "ec-type-badge";
-        badge.textContent = isHoldingLink ? "🏙️" : "🧍";
-        badge.title = isHoldingLink ? "Holding" : "Gracz";
+        badge.textContent = isHoldingLink ? "[H]" : (isUserLink ? "[G]" : "[MU]");
+        badge.title = isHoldingLink ? "Holding" : (isUserLink ? "Gracz" : "Jednostka wojskowa");
         badge.style.marginLeft = "3px";
         badge.style.fontSize = "12px";
         badge.style.fontWeight = "700";
@@ -183,7 +222,8 @@ Display depending on the situation:
         badge.style.padding = "0 3px";
         badge.style.border = "0px";
         badge.style.background = "transparent";
-        badge.style.color = "#111";
+        badge.style.color = "inherit";
+        badge.style.opacity = "0.72";
         if (nameSpan) {
           nameSpan.after(badge);
         } else {
@@ -514,6 +554,19 @@ Display depending on the situation:
         return;
       }
 
+      if (href.startsWith("/militaryunit/")) {
+        if (cache[href]?.url) {
+          handleResult({ url: cache[href].url, alt: cache[href].alt });
+          finalize();
+          return;
+        }
+        limit(() => fetchFlagForMilitaryUnit(href))
+          .then(handleResult)
+          .catch(() => {})
+          .finally(finalize);
+        return;
+      }
+
       finalize();
     });
   }
@@ -521,7 +574,7 @@ Display depending on the situation:
   function scanAndInject(root = document) {
     let anchors = findSellerAnchors(root).filter((a) => !alreadyInjected(a) && a.dataset.ecFlagPending !== "1");
     if (IS_CURRENCY_MARKET_PAGE) {
-      anchors = anchors.slice(0, 10);
+      anchors = anchors.slice(0, 5);
     }
     if (anchors.length) {
       processAnchors(anchors);
