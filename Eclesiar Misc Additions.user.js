@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Eclesiar Misc Additions
 // @namespace http://tampermonkey.net/
-// @version 1.3.0
+// @version 1.3.8
 // @description Fixed mission indicator, improved UX for energy and food indicators, added auto language detection and Polish translation, added EQ presets to build/mine views
 // @author p0tfur, based on script by ms05 + SirManiek
 // @match https://eclesiar.com/*
@@ -46,6 +46,287 @@ const CEDRU_VERSION = true;
   let lastEnergyShownSec = null;
   let lastFoodShownSec = null;
 
+  ////////////// STORAGE PAGE ENHANCEMENTS //////////////
+  // Styles for storage info line under each item amount
+  function addStorageInfoStyles() {
+    try {
+      if (document.getElementById("ecplus-storage-info-style")) return;
+      const style = document.createElement("style");
+      style.id = "ecplus-storage-info-style";
+      style.textContent = `
+        .storage-item .item-amount { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .ec-storage-info { font-size: 12px; opacity: 0.9; margin-top: 2px; line-height: 1.2; }
+        .ec-storage-info .lab { font-weight: 600; opacity: 0.95; }
+        .storage-item .item-amount .ec-amount { font-weight: 700; }
+        .ec-storage-info em { font-style: italic; }
+        .ec-storage-info u { text-decoration: underline; text-underline-offset: 2px; }
+
+        /* Make amount bar less intrusive in MU/Holding modals */
+        .militaryunit_management_modal .storage-item .item-amount,
+        .holding_storage_modal .storage-item .item-amount {
+          background-color: rgba(0, 123, 255, 0.28) !important; /* soften blue bar */
+        }
+        /* Add compact readable chip only for the injected weight line in modals */
+        .militaryunit_management_modal .ec-storage-info,
+        .holding_storage_modal .ec-storage-info {
+          font-size: 11px;
+          padding: 0 4px;
+          border-radius: 4px;
+          display: inline-block;
+        }
+      `;
+      document.head.appendChild(style);
+    } catch {}
+  }
+
+  function isSpecialStorageItem(itemEl) {
+    try {
+      if (!itemEl) return false;
+      let p = itemEl.parentElement;
+      while (p && p !== document.body) {
+        const title = p.querySelector("span.font-15.title-text.capitalize");
+        if (title) {
+          const txt = (title.textContent || "").trim();
+          if (/przedmioty\s+specjalne/i.test(txt)) return true;
+          if (/special\s+items/i.test(txt)) return true;
+          // if found a section title that is not "Przedmioty specjalne", stop climbing higher
+          if (/(przedmioty|surowiec|surowce|material|product)/i.test(txt)) return false;
+        }
+        p = p.parentElement;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  // Parse storage capacity numbers from header
+  function parseStorageCapacity() {
+    try {
+      const totalEl = document.querySelector(SELECTORS.storageCapacityTotal);
+      if (!totalEl) return null;
+      const p = totalEl.closest("p");
+      const txt = p && p.textContent ? p.textContent : totalEl.textContent;
+      const m = txt.match(/([\d.,]+)\s*\/\s*([\d.,]+)/);
+      if (!m) return null;
+      const used = parseFloat(m[1].replace(/\./g, "").replace(/,/g, ""));
+      const total = parseFloat(m[2].replace(/\./g, "").replace(/,/g, ""));
+      if (!isFinite(used) || !isFinite(total)) return null;
+      return { used, total, free: Math.max(0, total - used) };
+    } catch {
+      return null;
+    }
+  }
+
+  // Determine item category and space per unit using dataset and tooltip text
+  function getItemSpaceInfo(itemEl) {
+    try {
+      if (!itemEl) return null;
+      const t = (itemEl.getAttribute("data-itemtype") || "").toUpperCase();
+      if (t === "FOOD") return { category: "Food", unit: 3 };
+
+      // Tooltip paragraph text as hint
+      const tipP = itemEl.querySelector(".tooltip-content p");
+      const tip = (tipP?.textContent || "").toLowerCase();
+      for (const rule of ITEM_SPACE_MAP.tip) {
+        if (rule.re.test(tip)) {
+          if (rule.exclude && rule.exclude.test(tip)) continue;
+          return { category: rule.category, unit: rule.unit };
+        }
+      }
+
+      const imgs = Array.from(itemEl.querySelectorAll("img[alt]"));
+      for (const im of imgs) {
+        // Skip rank stars or icons within item-level row
+        if (im.closest && im.closest(".item-level")) continue;
+        const a = (im.getAttribute("alt") || "").toLowerCase().trim();
+        if (!a || a === "star") continue;
+        for (const rule of ITEM_SPACE_MAP.alt) {
+          if (rule.re.test(a)) {
+            if (rule.exclude && rule.exclude.test(a)) break;
+            return { category: rule.category, unit: rule.unit };
+          }
+        }
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Extracts the base amount from .item-amount, ignoring any injected nodes like .ec-storage-info
+  function getItemBaseAmount(amountEl) {
+    try {
+      if (!amountEl) return 0;
+      // Prefer the first non-empty text node directly under amountEl
+      for (let i = 0; i < amountEl.childNodes.length; i++) {
+        const n = amountEl.childNodes[i];
+        if (n.nodeType === 3) {
+          // TEXT_NODE
+          const raw = (n.nodeValue || "").trim();
+          if (raw) {
+            const m = raw.match(/([\d.,]+)/);
+            if (m) {
+              return parseFloat(m[1].replace(/\./g, "").replace(/,/g, "")) || 0;
+            }
+          }
+        }
+      }
+      // Fallback: use only the first number found in the element's own textContent
+      const txt = (amountEl.textContent || "").trim();
+      const m = txt.match(/([\d.,]+)/);
+      return m ? parseFloat(m[1].replace(/\./g, "").replace(/,/g, "")) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function annotateStorageItems() {
+    try {
+      if (!location.pathname.startsWith("/storage")) return;
+      const cap = parseStorageCapacity();
+      if (!cap) return;
+      addStorageInfoStyles();
+      const items = document.querySelectorAll(SELECTORS.storageItem);
+      log(`Annotating storage items: found ${items.length}, free capacity ${cap.free}`);
+      items.forEach((item) => {
+        try {
+          if (isSpecialStorageItem(item)) return; // skip special items section only
+          const space = getItemSpaceInfo(item);
+          if (!space) return;
+          const amountEl = item.querySelector(".item-amount");
+          if (!amountEl) return;
+          const num = getItemBaseAmount(amountEl);
+          const unit = space.unit;
+          const totalWeight = Math.max(0, Math.round(num * unit));
+
+          applyWeightUi(amountEl, unit, totalWeight);
+
+          // Extend the existing tooltip with a short note (once)
+          const tipP = item.querySelector(".tooltip-content p");
+          if (tipP && !tipP.parentElement.querySelector(".ec-weight-note")) {
+            const note = document.createElement("small");
+            note.className = "ec-weight-note";
+            let isPL = true;
+            try {
+              const stored = (typeof localStorage !== "undefined" && localStorage.getItem("ecPlus.language")) || null;
+              if (stored) isPL = stored === "pl";
+              else isPL = true;
+            } catch {
+              isPL = true;
+            }
+            const msg = isPL
+              ? `Uwaga: 1 szt. waży ${unit}. Podkreślona liczba obok to łączna waga (zajmowana powierzchnia magazynu).`
+              : `Note: 1 item weighs ${unit}. The underlined value is equal to the total storage capacity taken by these items.`;
+            note.textContent = msg;
+            // Insert as a separate line under the main tooltip paragraph
+            tipP.insertAdjacentElement("afterend", note);
+          }
+        } catch {}
+      });
+    } catch {}
+  }
+
+  function observeStoragePage() {
+    try {
+      if (!location.pathname.startsWith("/storage")) return;
+      const target =
+        document.querySelector(SELECTORS.storageContainer) || document.body || document.documentElement || document;
+      const onMut = debounce(() => {
+        annotateStorageItems();
+      }, 200);
+      const obs = new MutationObserver(onMut);
+      obs.observe(target, { childList: true, subtree: true, characterData: true });
+      annotateStorageItems();
+    } catch {}
+  }
+  ////////////// END STORAGE PAGE ENHANCEMENTS //////////////
+
+  function annotateModalStorage(root) {
+    try {
+      if (!root) return;
+      addStorageInfoStyles();
+      const items = root.querySelectorAll(SELECTORS.storageItem);
+      items.forEach((item) => {
+        try {
+          const space = getItemSpaceInfo(item);
+          if (!space) return;
+          const amountEl = item.querySelector(".item-amount");
+          if (!amountEl) return;
+          const num = getItemBaseAmount(amountEl);
+          const unit = space.unit;
+          const totalWeight = Math.max(0, Math.round(num * unit));
+          applyWeightUi(amountEl, unit, totalWeight);
+        } catch {}
+      });
+    } catch {}
+  }
+
+  function applyWeightUi(amountEl, unit, totalWeight) {
+    try {
+      // Wrap the visible amount in a bold span once
+      if (!amountEl.querySelector(".ec-amount")) {
+        for (let i = 0; i < amountEl.childNodes.length; i++) {
+          const n = amountEl.childNodes[i];
+          if (n.nodeType === 3) {
+            const raw = (n.nodeValue || "").trim();
+            if (raw) {
+              const m = raw.match(/([\d.,]+)/);
+              if (m) {
+                const before = n.nodeValue;
+                const idx = before.indexOf(m[1]);
+                if (idx >= 0) {
+                  const span = document.createElement("span");
+                  span.className = "ec-amount";
+                  span.textContent = m[1];
+                  const frag = document.createDocumentFragment();
+                  frag.appendChild(document.createTextNode(before.slice(0, idx)));
+                  frag.appendChild(span);
+                  frag.appendChild(document.createTextNode(before.slice(idx + m[1].length)));
+                  amountEl.replaceChild(frag, n);
+                }
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      let info = amountEl.querySelector(".ec-storage-info");
+      if (!info) {
+        info = document.createElement("div");
+        info.className = "ec-storage-info";
+        amountEl.appendChild(info);
+      }
+      // Visual: plain numbers only (no tooltips to avoid conflicts with game's tooltip)
+      if (info.innerHTML !== `<em>${unit}</em> || <u>${totalWeight}</u>`) {
+        info.innerHTML = `<em>${unit}</em> || <u>${totalWeight}</u>`;
+      }
+    } catch {}
+  }
+
+  function observeModalStorages() {
+    try {
+      const target = document.body || document.documentElement || document;
+      const onMut = debounce(() => {
+        try {
+          // Annotate any container that has storage items (works for MU and Holding)
+          document.querySelectorAll(".storage-items").forEach((container) => {
+            annotateModalStorage(container);
+          });
+        } catch {}
+      }, 200);
+      const obs = new MutationObserver(onMut);
+      obs.observe(target, { childList: true, subtree: true });
+      try {
+        document.querySelectorAll(".storage-items").forEach((container) => {
+          annotateModalStorage(container);
+        });
+      } catch {}
+    } catch {}
+  }
+
   // Apply preset: try direct API first, fallback to quick redirect on failure
   function applyPreset(num, buildId) {
     try {
@@ -59,12 +340,14 @@ const CEDRU_VERSION = true;
 
   function ensurePartyButtonsUX() {
     try {
+      if (!/^\/party\/[0-9]+(?:\/|$)/.test(location.pathname)) return;
       addPartyButtonsStyles();
     } catch {}
   }
 
   function observePartyTargets() {
     try {
+      if (!/^\/party\/[0-9]+(?:\/|$)/.test(location.pathname)) return;
       const target = document.body || document.documentElement || document;
       const onMut = debounce(() => {
         ensurePartyButtonsUX();
@@ -136,6 +419,26 @@ const CEDRU_VERSION = true;
           outline: 2px solid #fca5a5 !important; /* red-300 */
           outline-offset: 2px;
         }
+        /* Party view (minimal): prevent ballot image background split only on the top election banner */
+        .party__inner-card > a.alert.alert-light.party-election-item.mb-3 {
+          display: flex !important;
+          align-items: center !important;
+          flex-wrap: nowrap !important;
+          gap: 12px;
+          padding-top: 20px;  /* slightly taller banner */
+          padding-bottom: 35px;
+        }
+        /* Keep the 'Opuść partię' button above overlapping elements */
+        .party__inner-card .party__action-buttons .party__leave_party_btn {
+          position: relative;
+          z-index: 3;
+        }
+        .party__inner-card > a.alert.alert-light.party-election-item.mb-3 > img {
+          display: none !important;           /* hide ballot icon entirely */
+        }
+        .party__inner-card > a.alert.alert-light.party-election-item.mb-3 > .d-flex.flex-column.flex-grow-1 {
+          min-width: 0;             /* allow text to wrap inside without forcing new flex line */
+        }
       `;
       document.head.appendChild(style);
     } catch {}
@@ -145,21 +448,6 @@ const CEDRU_VERSION = true;
     if (energyFoodTickerId) {
       clearInterval(energyFoodTickerId);
       energyFoodTickerId = null;
-    }
-  }
-
-  function clearEnergyFoodObserver() {
-    try {
-      if (energyFoodObserver) {
-        energyFoodObserver.disconnect();
-        energyFoodObserver = null;
-      }
-    } catch {}
-    energyFoodObserverUpdate = null;
-    energyFoodObservedTarget = null;
-    if (energyFoodRetryTimeout) {
-      clearTimeout(energyFoodRetryTimeout);
-      energyFoodRetryTimeout = null;
     }
   }
 
@@ -488,6 +776,49 @@ const CEDRU_VERSION = true;
     energyAndFoodBars: "div.game-stats",
     foodTimer: "span.foodlimit-value span.full-in-timer",
     energyTimer: "span.health-value span.full-in-timer",
+    // Storage page
+    storageContainer: ".storage-container",
+    storageItem: ".storage-item",
+    storageCapacityTotal: ".current-main-storage-capacity",
+  };
+  // Central mapping for resolving unit weights
+  const ITEM_SPACE_MAP = {
+    tip: [
+      {
+        re: /(^|\b)resource used to produce\s*food\b|surowce?\s+wykorzystane.*produkcji.*żywno|surowce?.*produkcji.*żywno/i,
+        unit: 1,
+        category: "Grain",
+      },
+      {
+        re: /(^|\b)resource used to produce\s*weapons?\b|\bsurowce\b.*\bprodukcji\b.*\bkarabinów\b/i,
+        unit: 1,
+        category: "Iron",
+      },
+      {
+        re: /(^|\b)resource used to produce\s*tickets?\b|\bsurowce\b.*\bprodukcji\b.*\bbiletów\b/i,
+        unit: 1,
+        category: "Oil",
+      },
+      {
+        re: /(^|\b)resource used to produce\s*air\s*weapons?\b|\bsurowce\b.*\bprodukcji\b.*\bbroni\b.*\bpowietrz/i,
+        unit: 1,
+        category: "Titanium",
+      },
+      { re: /broń powietrzna|air weapon/i, unit: 4, category: "Airweapons" },
+      { re: /broń|weapon/i, unit: 2, category: "Weapons", exclude: /powietrzna|air/i },
+      { re: /jedzenie|food/i, unit: 3, category: "Food" },
+      { re: /bilet|ticket/i, unit: 4, category: "Tickets" },
+    ],
+    alt: [
+      { re: /air|powietrz|samolot|aircraft/i, unit: 4, category: "Airweapons" },
+      { re: /broń|weapon/i, unit: 2, category: "Weapons", exclude: /powietrz|air/i },
+      { re: /jedzenie|food/i, unit: 3, category: "Food" },
+      { re: /bilet|ticket/i, unit: 4, category: "Tickets" },
+      { re: /zboże|grain/i, unit: 1, category: "Grain" },
+      { re: /żelazo|zelazo|iron/i, unit: 1, category: "Iron" },
+      { re: /ropa|oil/i, unit: 1, category: "Oil" },
+      { re: /tytan|titanium/i, unit: 1, category: "Titanium" },
+    ],
   };
   /////////////////////////////////
 
@@ -570,6 +901,16 @@ const CEDRU_VERSION = true;
       // Only add the extra button for Polish and English UI
       if (LANGUAGE !== "pl" && LANGUAGE !== "en") return;
 
+      // Inject responsive font-size tweak for mobile once
+      try {
+        if (!document.getElementById("ec-cedruj-mobile-style")) {
+          const st = document.createElement("style");
+          st.id = "ec-cedruj-mobile-style";
+          st.textContent = `@media (max-width: 576px){ .ec-cedruj-button{ font-size: 11px !important; } }`;
+          document.head.appendChild(st);
+        }
+      } catch {}
+
       const mergeButtons = document.querySelectorAll("button.merge-button");
 
       if (!mergeButtons.length) {
@@ -601,6 +942,14 @@ const CEDRU_VERSION = true;
         clone.style.display = "flex";
         clone.style.alignItems = "flex-end";
         clone.style.justifyContent = "center";
+        // Force square size and prevent flex-grow on mobile
+        clone.style.width = "60px";
+        clone.style.height = "52px";
+        clone.style.aspectRatio = "1 / 1";
+        clone.style.flex = "0 0 52px";
+        clone.style.flexGrow = "0";
+        clone.style.flexShrink = "0";
+        clone.style.boxSizing = "border-box";
 
         // Apply custom background image if configured
         try {
@@ -1529,6 +1878,8 @@ const CEDRU_VERSION = true;
       localizeMergePanelAndHideOriginal();
       observePresetTargets();
       observePartyTargets();
+      observeStoragePage();
+      observeModalStorages();
 
       if (DISPLAY_BOTH_RANKS) {
         displayBothRanks();
@@ -1567,6 +1918,8 @@ const CEDRU_VERSION = true;
     localizeMergePanelAndHideOriginal();
     observePresetTargets();
     observePartyTargets();
+    observeStoragePage();
+    observeModalStorages();
 
     if (DISPLAY_BOTH_RANKS) {
       displayBothRanks();

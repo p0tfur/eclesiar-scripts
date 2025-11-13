@@ -34,10 +34,8 @@
         backdrop-filter: blur(10px);
         border: 2px solid rgba(139, 69, 19, 0.5);
         border-radius: 16px;
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5),
-          0 10px 10px -5px rgba(0, 0, 0, 0.3);
-        transition: transform 0.3s ease, box-shadow 0.3s ease,
-          border-color 0.3s ease;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+        transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
       }
       .script-card:hover {
         transform: translateY(-5px);
@@ -55,8 +53,7 @@
         box-shadow: 0 0 15px rgba(139, 69, 19, 0.6);
       }
       .gothic-text {
-        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8),
-          0 0 10px rgba(139, 69, 19, 0.5);
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), 0 0 10px rgba(139, 69, 19, 0.5);
         font-family: "Georgia", serif;
       }
       .script-card h3 {
@@ -100,12 +97,7 @@
       .hr-runic {
         height: 1px;
         width: 100%;
-        background: linear-gradient(
-          90deg,
-          transparent,
-          rgba(139, 69, 19, 0.8),
-          transparent
-        );
+        background: linear-gradient(90deg, transparent, rgba(139, 69, 19, 0.8), transparent);
         margin: 14px 0 6px 0;
       }
       .gothic-card-light {
@@ -119,6 +111,40 @@
         backdrop-filter: blur(12px);
         border: 2px solid rgba(139, 69, 19, 0.5);
         border-radius: 12px;
+      }
+      /* Changelog disclosure */
+      .changelog {
+        margin-top: 12px;
+        border-top: 1px solid rgba(139, 69, 19, 0.3);
+        padding-top: 8px;
+      }
+      .changelog summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #f3f4f6;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .changelog summary::-webkit-details-marker {
+        display: none;
+      }
+      .disclosure-chevron {
+        transition: transform 0.2s ease;
+      }
+      details[open] .disclosure-chevron {
+        transform: rotate(90deg);
+      }
+      .label-open {
+        display: none;
+      }
+      details[open] .label-open {
+        display: inline;
+      }
+      details[open] .label-closed {
+        display: none;
       }
     </style>
   </head>
@@ -139,12 +165,7 @@
           style="background: rgba(0, 0, 0, 0.3)"
         >
           Witamy w Ko... Eclesiar Scripts by
-          <a
-            href="https://eclesiar.com/user/11062"
-            target="_blank"
-            style="color: #842214"
-            >p0tfur</a
-          >
+          <a href="https://eclesiar.com/user/11062" target="_blank" style="color: #842214">p0tfur</a>
         </h1>
         <p
           class="text-xl text-white/90 max-w-2xl mx-auto inline-block px-4 py-2 rounded"
@@ -153,12 +174,8 @@
           Samoaktualizujące się skrypty Tampermonkey dla gry Eclesiar.
         </p>
         <div class="hr-runic"></div>
-        <p
-          class="lore-quote max-w-3xl mx-auto"
-          style="background: rgba(0, 0, 0, 0.3)"
-        >
-          "Powiedzmy sobie szczerze. Przyszedłeś tu tylko dlatego, żeby móc
-          pocałować Gomeza w dupę" — Kharim.
+        <p class="lore-quote max-w-3xl mx-auto" style="background: rgba(0, 0, 0, 0.3)">
+          "Powiedzmy sobie szczerze. Przyszedłeś tu tylko dlatego, żeby móc pocałować Gomeza w dupę" — Kharim.
         </p>
       </header>
 
@@ -167,26 +184,20 @@
         <!-- Eclesiar Market & Auctions -->
         <div class="script-card p-6">
           <div class="text-center mb-4">
-            <div
-              class="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-3"
-            >
+            <div class="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-3">
               <span class="text-2xl">🏛️</span>
             </div>
-            <h3 class="text-xl font-bold text-gray-800 mb-2">
-              Market & Auctions
-            </h3>
-            <span
-              class="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-medium"
-            >
-              v1.2.9
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Market & Auctions</h3>
+            <span class="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full font-medium">
+              v1.3.0
             </span>
           </div>
           <p class="text-gray-600 mb-4 text-sm leading-relaxed">
-            Ułatwia zakupy poprzez wyświetlanie flag narodowości sprzedawców
-            obok ich nazw (zarówno gracze, jak i holdingi - wtedy flaga jest
-            flagą właściciela holdingu). Dla aukcji dodaje specjalne wskaźniki
-            cenowe, które pokazują, czy aktualna oferta jest korzystna w
-            porównaniu do średnich cen z 7 dni (<span class="text-[#facc15]">
+            Ułatwia zakupy poprzez wyświetlanie flag narodowości sprzedawców obok ich nazw (zarówno gracze, holdingi -
+            wtedy flaga jest flagą właściciela holdingu oraz MU). Dla aukcji dodaje specjalne wskaźniki cenowe, które
+            pokazują, czy aktualna oferta jest korzystna w porównaniu do średnich cen z 7 dni (<span
+              class="text-[#facc15]"
+            >
               ━</span
             >
             w zakresie +/- 10%, <span class="text-[#dc2626]">▲</span> powyżej,
@@ -199,40 +210,82 @@
             📥 Pobierz skrypt
           </a>
           <div class="chip-row">
-            <span class="chip"
-              ><span class="ico">🛡️</span>"A to ci niespodzianka!"</span
-            >
-            <span class="chip"
-              ><span class="ico">🧱</span>Targowanie jak u Bospera</span
-            >
-            <span class="chip"
-              ><span class="ico">💰</span>Rynek jak w Khorinis</span
-            >
+            <span class="chip"><span class="ico">🛡️</span>"A to ci niespodzianka!"</span>
+            <span class="chip"><span class="ico">🧱</span>Targowanie jak u Bospera</span>
+            <span class="chip"><span class="ico">💰</span>Rynek jak w Khorinis</span>
           </div>
+          <details class="changelog">
+            <summary>
+              <span class="disclosure-chevron">▶</span>
+              <span class="label-closed">Pokaż changelog</span>
+              <span class="label-open">Ukryj changelog</span>
+            </summary>
+            <div class="mt-2 text-sm text-white/90">
+              <ul class="space-y-2">
+                <li class="text-center font-semibold">1.3.0</li>
+                <ul class="space-y-2 text-sm">
+                  <li>
+                    <span class="ico">-</span> zamiana emotek oznaczających gracza/holding na literki [G] = gracz, [H] =
+                    holding, [MU] = military unit. Emotki nie działały u wszystkich graczy.
+                  </li>
+                  <li>
+                    <span class="ico">-</span> w "Currency Market" ograniczono zaciąganie flag do 5 wierszy na żądanie,
+                    aby zapobiec częstym błędom "429" (limit zapytań). Zaciągną się wszystkie flagi na stronie, ale po
+                    prostu zajmie to chwilę
+                  </li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm mt-3">
+                <li class="text-center font-semibold">1.2.9</li>
+                <ul class="space-y-2 text-sm">
+                  <li>
+                    <span class="ico">-</span> ograniczono pokazywanie banneru "Kupuj polskie..." do "General Market".
+                  </li>
+                  <li><span class="ico">+</span> zwiększono cache flag userów do 72h.</li>
+                  <li>
+                    <span class="ico">-</span> w "Currency Market" ograniczono wyświetlanie flag pierwszych 10 wierszy,
+                    aby zapobiec częstym błędom "429" (limit zapytań).
+                  </li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm mt-3">
+                <li class="text-center font-semibold">1.2.6</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> flagi narodowości sprzedającego również na rynek walutowy.</li>
+                  <li>
+                    <span class="ico">+</span> sprawdzenie narodowości również jeśli właścicielem holdingu jest grupa
+                    bojowa.
+                  </li>
+                  <li><span class="ico">+</span> drobne wizualne poprawki.</li>
+                  <p>
+                    <span class="font-semibold">It's a feature, not a bug. </span>Przy pierwszym wejściu może wyrzucić
+                    błąd "429 Too many requests." Tak ma być. Po prostu pierwsze sprawdzenie narodowości generuje
+                    większą ilość zapytań.
+                  </p>
+                </ul>
+              </ul>
+            </div>
+          </details>
         </div>
 
         <!-- Eclesiar Misc Additions -->
         <div class="script-card p-6">
           <div class="text-center mb-4">
-            <div
-              class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-3"
-            >
+            <div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-3">
               <span class="text-2xl">⚙️</span>
             </div>
             <h3 class="text-xl font-bold text-gray-800 mb-2">Misc Additions</h3>
-            <span
-              class="inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-medium"
-            >
-              v1.3.0
+            <span class="inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-medium">
+              v1.3.8
             </span>
           </div>
-          <p class="text-gray-600 mb-4 text-sm leading-relaxed">
-            Dodaje wiele usprawnień do codziennej rozgrywki: dodaje opcję zmiany
-            ekwipunku w widoku budowy oraz kopalni, pokazuje czas do pełnego
-            uzupełnienia energii i jedzenia, dodaje opcję Cedrowania przy
-            łączeniu przedmiotów, wyświetla obie rangi (wojskową i budowlaną)
-            oraz dodaje menu "Moje transakcje".
+          <p class="text-gray-600 mb-2 text-sm leading-relaxed">
+            Dodaje wiele usprawnień do codziennej rozgrywki: dodaje opcję zmiany ekwipunku w widoku budowy oraz kopalni,
+            pokazuje czas do pełnego uzupełnienia energii i jedzenia, dodaje opcję Cedrowania przy łączeniu przedmiotów,
+            wyświetla obie rangi (wojskową i budowlaną) oraz dodaje menu "Moje transakcje". Pokazuje rzeczywistą wagę
+            przedmiotów w Pawlaczu.
           </p>
+          <p class="text-gray-600 mb-4 text-sm">Based on script by ms05 + SirManiek</p>
           <a
             href="https://24na7.info/eclesiar-scripts/Eclesiar%20Misc%20Additions.user.js"
             class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
@@ -240,36 +293,94 @@
             📥 Pobierz skrypt
           </a>
           <div class="chip-row">
-            <span class="chip"
-              ><span class="ico">🔥</span>Bezimienny approved</span
-            >
+            <span class="chip"><span class="ico">🔥</span>Bezimienny approved</span>
           </div>
+          <details class="changelog">
+            <summary>
+              <span class="disclosure-chevron">▶</span>
+              <span class="label-closed">Pokaż changelog</span>
+              <span class="label-open">Ukryj changelog</span>
+            </summary>
+            <div class="mt-2 text-sm text-white/90">
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.3.8</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span>poprawka wizualna na mobile dla przycisku "Cedruj!"</li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.3.7</li>
+                <ul class="space-y-2 text-sm">
+                  <li>
+                    <span class="ico">+</span>rozszerzenie funkcjonalności pokazywania rzeczywistej wagi przedmiotów do
+                    magazynów holdingów oraz bojówek
+                  </li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.3.6</li>
+                <ul class="space-y-2 text-sm">
+                  <li>
+                    <span class="ico">+</span>wizualna poprawka bannerów informujących o wynikach wyborów aby nie psuły
+                    wyglądu strony
+                  </li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.3.5</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> w Pawlaczu oprócz ilość pokazuje rzeczywistą wagę przedmiotów.</li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm mt-3">
+                <li class="text-center">1.3.0</li>
+                <ul class="space-y-2 text-sm">
+                  <li>
+                    <span class="ico">+</span> format daty dla języka angielskiego zmieniony z amerykańskiego na
+                    brytyjski
+                  </li>
+                  <li>
+                    <span class="ico">+</span> odliczanie sekundowe zawsze w formacie dwucyfrowym (np. 01s, 02s, 03s)
+                  </li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm mt-3">
+                <li class="text-center">1.2.9</li>
+                <ul class="space-y-2 text-sm">
+                  <li>
+                    <span class="ico">-</span> usunięto datę ze wskaźników kiedy ene/chlebki będą pełne pozostawiając
+                    tylko godzinę.
+                  </li>
+                  <li>
+                    <span class="ico">+</span> aktualizacja wskaźników (odliczania w nawiasie) na żywo a nie tylko przy
+                    odświeżeniu strony.
+                  </li>
+                  <li>
+                    <span class="ico">+</span> poprawione przyciski do zgłaszania się na kandydata w widoku partii.
+                  </li>
+                </ul>
+              </ul>
+            </div>
+          </details>
         </div>
 
         <!-- Eclesiar Training Center Plus -->
         <div class="script-card p-6">
           <div class="text-center mb-4">
-            <div
-              class="w-16 h-16 bg-purple-500 rounded-full flex items-center justify-center mx-auto mb-3"
-            >
+            <div class="w-16 h-16 bg-purple-500 rounded-full flex items-center justify-center mx-auto mb-3">
               <span class="text-2xl">💪</span>
             </div>
-            <h3 class="text-xl font-bold text-gray-800 mb-2">
-              Training Center Plus
-            </h3>
-            <span
-              class="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full font-medium"
-            >
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Training Center Plus</h3>
+            <span class="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full font-medium">
               v1.2.1
             </span>
           </div>
           <p class="text-gray-600 mb-4 text-sm leading-relaxed">
-            Poprawia centrum treningowe poprzez dodanie panelu ustawień z
-            opcjami włączania/wyłączania funkcji, alternatywnego widoku tabeli
-            dla statystyk sprzętu, kolorowych obramowań dla najlepszego sprzętu
-            (perf equipment), filtrów do wyszukiwania sprzętu oraz przeniesienie
-            przycisku trenowania w wygodniejsze miejsce.
+            Poprawia centrum treningowe poprzez dodanie panelu ustawień z opcjami włączania/wyłączania funkcji,
+            alternatywnego widoku tabeli dla statystyk sprzętu, kolorowych obramowań dla najlepszego sprzętu (perf
+            equipment), filtrów do wyszukiwania sprzętu oraz przeniesienie przycisku trenowania w wygodniejsze miejsce.
           </p>
+          <p class="text-gray-600 mb-4 text-sm">Based on script by ms05 + SirManiek</p>
           <a
             href="https://24na7.info/eclesiar-scripts/Eclesiar%20Training%20Center.user.js"
             class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
@@ -277,33 +388,118 @@
             📥 Pobierz skrypt
           </a>
           <div class="chip-row">
-            <span class="chip"
-              ><span class="ico">💪</span>+10 do siły (po zupie z ryżu)</span
-            >
-            <span class="chip"
-              ><span class="ico">🏹</span>Diego mówi: celuj w głowę</span
-            >
-            <span class="chip"
-              ><span class="ico">🥋</span>Szkoła Lee - plan treningu na
-              tacy</span
-            >
+            <span class="chip"><span class="ico">💪</span>+10 do siły (po zupie z ryżu)</span>
+            <span class="chip"><span class="ico">🏹</span>Diego mówi: celuj w głowę</span>
+            <span class="chip"><span class="ico">🥋</span>Szkoła Lee - plan treningu na tacy</span>
+          </div>
+          <details class="changelog">
+            <summary>
+              <span class="disclosure-chevron">▶</span>
+              <span class="label-closed">Pokaż changelog</span>
+              <span class="label-open">Ukryj changelog</span>
+            </summary>
+            <div class="mt-2 text-sm text-white/90">
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">Brak wpisów — aktualizacje w przygotowaniu.</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+
+        <!-- Eclesiar Januszex Assistant -->
+        <div class="script-card p-6">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 bg-amber-500 rounded-full flex items-center justify-center mx-auto mb-3">
+              <span class="text-2xl">🧰</span>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Januszex Assistant</h3>
+            <span class="inline-block bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded-full font-medium">
+              v1.0.1
+            </span>
+          </div>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">
+            Asystent każdego biznesmena - łatwo wystawiaj oferty na rynku na podstawie tego który holding masz wybrany:
+            wybierz holding -> kliknij "Stwórz ofertę" -> gotowe. W menu "Moje miejsca" dodaje Twoje holdingi dla
+            łatwego dostępu (linki pojawią się dopiero po wizycie na rynku, w widoku sprzedaży).
+          </p>
+          <a
+            href="https://24na7.info/eclesiar-scripts/Eclesiar_Januszex_Assistant_by_p0tfur.user.js"
+            class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
+          >
+            📥 Pobierz skrypt
+          </a>
+          <div class="chip-row">
+            <span class="chip"><span class="ico">⚡</span>Milten: bez magii, ale działa</span>
+            <span class="chip"><span class="ico">🗺️</span>Bennet: robota zrobiona, bez gadania</span>
+          </div>
+          <details class="changelog">
+            <summary>
+              <span class="disclosure-chevron">▶</span>
+              <span class="label-closed">Pokaż changelog</span>
+              <span class="label-open">Ukryj changelog</span>
+            </summary>
+            <div class="mt-2 text-sm text-white/90">
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.0.1</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> wystawianie ofert jako MU, kraj oraz holding należący do MU</li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.0.0</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> pierwsze wydanie skryptu.</li>
+                </ul>
+              </ul>
+            </div>
+          </details>
+        </div>
+
+        <!-- Placeholder Script (Wkrótce) -->
+        <div class="script-card p-6">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 bg-slate-500 rounded-full flex items-center justify-center mx-auto mb-3">
+              <span class="text-2xl">🧪</span>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Wkrótce</h3>
+            <span class="inline-block bg-slate-100 text-slate-800 text-xs px-2 py-1 rounded-full font-medium">
+              v0.0.0
+            </span>
+          </div>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">Nowy skrypt w przygotowaniu.</p>
+          <div class="chip-row">
+            <span class="chip"><span class="ico">🛠️</span>Gomez jeszcze nie zatwierdził</span>
+            <span class="chip"><span class="ico">⛏️</span>Lee: tempo, chłopcy!</span>
+          </div>
+        </div>
+
+        <!-- Placeholder Script (Wkrótce) -->
+        <div class="script-card p-6">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 bg-teal-500 rounded-full flex items-center justify-center mx-auto mb-3">
+              <span class="text-2xl">🧱</span>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Wkrótce</h3>
+            <span class="inline-block bg-teal-100 text-teal-800 text-xs px-2 py-1 rounded-full font-medium">
+              v0.0.0
+            </span>
+          </div>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">Nowy skrypt w przygotowaniu.</p>
+          <div class="chip-row">
+            <span class="chip"><span class="ico">🧙</span>Xardas: wszystko w swoim czasie</span>
+            <span class="chip"><span class="ico">🐺</span>Gorn: biorę to w ciemno</span>
           </div>
         </div>
       </div>
 
       <!-- Installation Instructions -->
       <div class="gothic-card-light p-6 mb-8">
-        <h2 class="text-2xl font-bold text-white mb-4 text-center gothic-text">
-          Jak zainstalować?
-        </h2>
+        <h2 class="text-2xl font-bold text-white mb-4 text-center gothic-text">Jak zainstalować?</h2>
         <div class="grid md:grid-cols-2 gap-6 text-white/90">
           <div>
-            <h3 class="font-semibold mb-2 gothic-text">
-              1. Zainstaluj Tampermonkey
-            </h3>
+            <h3 class="font-semibold mb-2 gothic-text">1. Zainstaluj Tampermonkey</h3>
             <p class="text-sm">
-              Jeśli nie masz jeszcze zainstalowanego, pobierz rozszerzenie
-              Tampermonkey dla swojej przeglądarki:
+              Jeśli nie masz jeszcze zainstalowanego, pobierz rozszerzenie Tampermonkey dla swojej przeglądarki:
             </p>
             <ul class="text-sm mt-2 space-y-1">
               <li>
@@ -327,18 +523,16 @@
           <div>
             <h3 class="font-semibold mb-2 gothic-text">2. Zainstaluj skrypt</h3>
             <p class="text-sm">
-              Kliknij przycisk "Pobierz skrypt" powyżej. Tampermonkey
-              automatycznie rozpozna plik i zapyta o instalację. Potwierdź
-              instalację.
+              Kliknij przycisk "Pobierz skrypt" powyżej. Tampermonkey automatycznie rozpozna plik i zapyta o instalację.
+              Potwierdź instalację.
             </p>
             <p class="text-sm mt-2">
-              <strong>Gotowe!</strong> Skrypt będzie działał automatycznie na
-              stronie Eclesiar.
+              <strong>Gotowe!</strong> Skrypt będzie działał automatycznie na stronie Eclesiar.
             </p>
           </div>
           <p>
-            Wszystkie skrypty testowane są na PC oraz Firefox (wyrywkowo również
-            Chrome, Edge, Vivaldi). Ewentualne bugi proszę zgłaszać na Discord.
+            Wszystkie skrypty testowane są na PC oraz Firefox (wyrywkowo również Chrome, Edge, Vivaldi). Ewentualne bugi
+            proszę zgłaszać na Discord.
           </p>
         </div>
       </div>
@@ -355,134 +549,25 @@
         </div>
       </section>
 
-      <!-- Changelog Placeholder -->
-      <section class="gothic-card-light p-6">
-        <h2 class="text-2xl font-bold text-white mb-6 text-center gothic-text">
-          Historia zmian
-        </h2>
-        <div class="grid gap-6 text-white/90 md:grid-cols-3">
-          <div class="rounded-lg bg-white/5 p-4 h-full">
-            <h3
-              class="mb-3 text-center text-lg font-semibold text-white gothic-text"
-            >
-              Eclesiar Market &amp; Auctions
-            </h3>
-            <ul class="space-y-2 text-sm">
-              <li class="text-center font-semibold">1.2.9</li>
-              <ul class="space-y-2 text-sm">
-                <li>
-                  <span class="ico">-</span> ograniczono pokazywanie banneru
-                  "Kupuj polskie..." do "General Market".
-                </li>
-                <li>
-                  <span class="ico">+</span> zwiększono cache flag userów do
-                  72h.
-                </li>
-                <li>
-                  <span class="ico">-</span> w "Currency Market" ograniczono
-                  wyświetlanie flag pierwszych 10 wierszy, aby zapobiec częstym
-                  błędom "429" (limit zapytań).
-                </li>
-              </ul>
-            </ul>
-            <ul class="space-y-2 text-sm">
-              <li class="text-center font-semibold">1.2.6</li>
-              <ul class="space-y-2 text-sm">
-                <li>
-                  <span class="ico">+</span> flagi narodowości sprzedającego
-                  również na rynek walutowy.
-                </li>
-                <li>
-                  <span class="ico">+</span> sprawdzenie narodowości również
-                  jeśli właścicielem holdingu jest grupa bojowa.
-                </li>
-                <li><span class="ico">+</span> drobne wizualne poprawki.</li>
-                <p>
-                  <span class="font-semibold">It's a feature, not a bug. </span
-                  >Przy pierwszym wejściu może wyrzucić błąd "429 Too many
-                  requests." Tak ma być. Po prostu pierwsze sprawdzenie
-                  narodowości generuje większą ilość zapytań.
-                </p>
-              </ul>
-            </ul>
-          </div>
-          <div class="rounded-lg bg-white/5 p-4 h-full">
-            <h3
-              class="mb-3 text-center text-lg font-semibold text-white gothic-text"
-            >
-              Eclesiar Misc Additions
-            </h3>
-             <ul class="space-y-2 text-sm">
-              <li class="text-center">1.3.0</li>
-              <ul class="space-y-2 text-sm">
-                <li>
-                  <span class="ico">+</span> format daty dla języka angielskiego zmieniony z amerykańskiego na brytyjski
-                </li>
-                <li>
-                  <span class="ico">+</span> odliczanie sekundowe zawsze w formacie dwucyfrowym (np. 01s, 02s, 03s)
-                </li>
-              </ul>
-            <ul class="space-y-2 text-sm">
-              <li class="text-center">1.2.9</li>
-              <ul class="space-y-2 text-sm">
-                <li>
-                  <span class="ico">-</span> usunięto datę ze wskaźników kiedy
-                  ene/chlebki będą pełne pozostawiając tylko godzinę.
-                </li>
-                <li>
-                  <span class="ico">+</span> aktualizacja wskaźników (odliczania
-                  w nawiasie) na żywo a nie tylko przy odświeżeniu strony.
-                </li>
-                <li>
-                  <span class="ico">+</span> poprawione przyciski do zgłaszania
-                  się na kandydata w widoku partii.
-                </li>
-              </ul>
-            </ul>
-          </div>
-          <div class="rounded-lg bg-white/5 p-4 h-full">
-            <h3
-              class="mb-3 text-center text-lg font-semibold text-white gothic-text"
-            >
-              Training Center Plus
-            </h3>
-            <ul class="space-y-2 text-sm">
-              <li class="text-center">
-                Brak wpisów — aktualizacje w przygotowaniu.
-              </li>
-            </ul>
-          </div>
-        </div>
-      </section>
-
       <!-- Smaczki z Kolonii -->
       <div class="gothic-card-light p-6 mt-6">
-        <h2 class="text-2xl font-bold text-white mb-3 text-center gothic-text">
-          Smaczki z Kolonii
-        </h2>
+        <h2 class="text-2xl font-bold text-white mb-3 text-center gothic-text">Smaczki z Kolonii</h2>
         <div class="hr-runic"></div>
-        <ul
-          class="text-md text-white/90 space-y-4 text-center max-w-5xl mx-auto"
-        >
+        <ul class="text-md text-white/90 space-y-4 text-center max-w-5xl mx-auto">
           <li>
-            • „Nie ma takiego bicia” - ale na aukcji zawsze ktoś przebije. Za
-            przebicie obcokrajowca punkty gratis.
+            • „Nie ma takiego bicia” - ale na aukcji zawsze ktoś przebije. Za przebicie obcokrajowca punkty gratis.
           </li>
           <li>
-            • Ryż z Górniczej Doliny poprawia skupienie przy przeglądaniu ofert.
-            A Eclesiar Market & Auctions pomaga, aby nie kupić od Araba.
+            • Ryż z Górniczej Doliny poprawia skupienie przy przeglądaniu ofert. A Eclesiar Market & Auctions pomaga,
+            aby nie kupić od Czatera.
           </li>
           <li>
-            • Diego poleca: zanim kupisz, sprawdź średnią cenę z 7 dni. Teraz
-            jeszcze łatwiej dzięki Eclesiar Market & Auctions.
+            • Diego poleca: zanim kupisz, sprawdź średnią cenę z 7 dni. Teraz jeszcze łatwiej dzięki Eclesiar Market &
+            Auctions.
           </li>
           <li>
             • U kowala usłyszysz: „Masz rudę?” - u nas: „Masz golda?” Jak tak to
-            <a
-              href="https://eclesiar.com/user/11062"
-              class="text-blue-300 hover:text-blue-200 underline"
-              >WYŚLIJ!</a
-            >
+            <a href="https://eclesiar.com/user/11062" class="text-blue-300 hover:text-blue-200 underline">WYŚLIJ!</a>
           </li>
         </ul>
       </div>
@@ -491,23 +576,11 @@
       <footer class="text-center mt-12 text-white/70 text-sm">
         <p>
           © 2025
-          <a
-            href="https://github.com/p0tfur"
-            class="text-blue-300 hover:text-blue-200 underline"
-            >p0tfur</a
-          >
+          <a href="https://github.com/p0tfur" class="text-blue-300 hover:text-blue-200 underline">p0tfur</a>
           | Stworzone z ❤️ do
-          <a
-            href="PFA-soldier.png"
-            class="text-blue-300 hover:text-blue-200 underline"
-            >PFA</a
-          >
+          <a href="PFA-soldier.png" class="text-blue-300 hover:text-blue-200 underline">PFA</a>
           i całej społeczności graczy | Licencja:
-          <a
-            href="license.md"
-            class="text-blue-300 hover:text-blue-200 underline"
-            >CC BY-NC-SA 4.0</a
-          >
+          <a href="license.md" class="text-blue-300 hover:text-blue-200 underline">CC BY-NC-SA 4.0</a>
         </p>
       </footer>
     </div>
