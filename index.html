@@ -112,6 +112,22 @@
         border: 2px solid rgba(139, 69, 19, 0.5);
         border-radius: 12px;
       }
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.75);
+      }
+      .modal-content {
+        background: rgba(15, 15, 15, 0.95);
+        border-radius: 12px;
+        border: 1px solid rgba(139, 69, 19, 0.5);
+        max-height: 90vh;
+        overflow-y: auto;
+      }
       /* Changelog disclosure */
       .changelog {
         margin-top: 12px;
@@ -534,6 +550,178 @@
             Wszystkie skrypty testowane są na PC oraz Firefox (wyrywkowo również Chrome, Edge, Vivaldi). Ewentualne bugi
             proszę zgłaszać na Discord.
           </p>
+          <p class="text-sm mt-3">
+            Korzystasz z telefonu?
+            <button
+              type="button"
+              class="text-blue-300 hover:text-blue-200 underline font-semibold"
+              data-modal-target="android-install-modal"
+            >
+              Instrukcja dla Android
+            </button>
+            /
+            <button
+              type="button"
+              class="text-blue-300 hover:text-blue-200 underline font-semibold"
+              data-modal-target="ios-install-modal"
+            >
+              Instrukcja dla iOS
+            </button>
+          </p>
+        </div>
+      </div>
+
+      <!-- Mobile Installation Modals -->
+      <div id="android-install-modal" class="modal-overlay hidden" aria-hidden="true" role="dialog" aria-modal="true">
+        <div class="modal-content max-w-xl w-full mx-4 p-6 text-white shadow-xl gothic-card">
+          <div class="flex justify-between items-start mb-4">
+            <h3 class="text-xl font-bold gothic-text">Instalacja skryptów na Androidzie</h3>
+            <button type="button" class="text-white/70 hover:text-white" data-modal-close aria-label="Zamknij">
+              ×
+            </button>
+          </div>
+          <p class="text-sm text-white/80 mb-3">
+            Na Androidzie najwygodniej używać skryptów w przeglądarce
+            <span class="font-semibold">Firefox Nightly</span> z obsługą dodatków.
+          </p>
+          <ol class="list-decimal list-inside space-y-2 text-sm text-white/80">
+            <li>Otwórz sklep Google Play i zainstaluj aplikację <span class="font-semibold">Firefox Nightly</span>.</li>
+            <li>Uruchom Firefox Nightly i (opcjonalnie) zaloguj się na swoje konto Firefox.</li>
+            <li>
+              Wejdź na stronę
+              <span class="font-semibold">addons.mozilla.org</span>
+              i wyszukaj dodatek <span class="font-semibold">Tampermonkey</span>, następnie go zainstaluj.
+            </li>
+            <li>
+              Wejdź ponownie na tę stronę w Firefox Nightly, kliknij „Pobierz skrypt” i zaakceptuj instalację w
+              Tampermonkey.
+            </li>
+          </ol>
+          <p class="text-xs text-white/60 mt-4">
+            Uwaga: dokładne nazwy opcji mogą się lekko różnić w zależności od wersji Firefox Nightly.
+          </p>
+        </div>
+      </div>
+
+      <div id="ios-install-modal" class="modal-overlay hidden" aria-hidden="true" role="dialog" aria-modal="true">
+        <div class="modal-content max-w-3xl w-full mx-4 p-6 text-white shadow-xl gothic-card">
+          <div class="flex justify-between items-start mb-4">
+            <h3 class="text-xl font-bold gothic-text">Instalacja skryptów na iOS (iPhone / iPad)</h3>
+            <button type="button" class="text-white/70 hover:text-white" data-modal-close aria-label="Zamknij">
+              ×
+            </button>
+          </div>
+          <p class="text-md text-white/80 mb-4">
+            Poniżej znajdziesz przykładową ścieżkę konfiguracji Safari i rozszerzenia do skryptów użytkownika na iOS.
+            Kroki mogą się minimalnie różnić w zależności od wersji iOS, ale ogólna idea pozostaje taka sama.
+          </p>
+          <ol class="space-y-4 text-md text-white/80">
+            <li>
+              <p class="font-semibold mb-1">1. Otwórz App Store i zainstaluj rozszerzenie do skryptów użytkownika</p>
+              <div class="space-y-2">
+                <p>Wyszukaj aplikację Userscripts i zainstaluj.</p>
+                <img
+                  src="img/IMG_0244.PNG"
+                  alt="Krok 1 – wyszukiwanie aplikacji w App Store"
+                  class="w-full max-w-md mx-auto rounded-lg border-2 border-white/40 shadow-md"
+                  loading="lazy"
+                />
+              </div>
+            </li>
+            <li>
+              <p class="font-semibold mb-1">2. Włącz rozszerzenie w Safari</p>
+              <div class="space-y-2">
+                <p>
+                  Przejdź do
+                  <span class="font-semibold">Ustawienia -> Aplikacje -> Safari -> Rozszerzenia -> Userscripts</span>.
+                </p>
+                <img
+                  src="img/IMG_0245.PNG"
+                  alt="Krok 2 – włączanie rozszerzenia w ustawieniach Safari"
+                  class="w-full max-w-md mx-auto rounded-lg border-2 border-white/40 shadow-md"
+                  loading="lazy"
+                />
+              </div>
+            </li>
+            <li>
+              <p class="font-semibold mb-1">3. Przyznaj wymagane uprawnienia</p>
+              <div class="space-y-2">
+                <p>Zezwól rozszerzeniu na działanie: "Inne witryny Pozwól".</p>
+                <img
+                  src="img/IMG_0246.PNG"
+                  alt="Krok 3 – nadawanie uprawnień rozszerzeniu w Safari"
+                  class="w-full max-w-md mx-auto rounded-lg border-2 border-white/40 shadow-md"
+                  loading="lazy"
+                />
+              </div>
+            </li>
+            <li>
+              <p class="font-semibold mb-1">4. Otwórz stronę ze skryptem w Safari</p>
+              <div class="space-y-2">
+                <p>
+                  Wejdź na tę stronę (https://24na7.info/eclesiar-scripts/) w Safari na iOS, a następnie naciśnij
+                  przycisk „Pobierz skrypt” przy wybranym skrypcie. Skrypt otworzy sie jak na zrzucie ekranu.
+                </p>
+                <img
+                  src="img/IMG_0247.PNG"
+                  alt="Krok 4 – otwieranie strony ze skryptem w Safari"
+                  class="w-full max-w-md mx-auto rounded-lg border-2 border-white/40 shadow-md"
+                  loading="lazy"
+                />
+              </div>
+            </li>
+            <li>
+              <p class="font-semibold mb-1">5. Aktywuj rozszerzenie z paska adresu</p>
+              <div class="space-y-2">
+                <p>Dotknij ikony po lewej stronie paska adresu i wybierz "Userscripts".</p>
+                <img
+                  src="img/IMG_0248.PNG"
+                  alt="Krok 5 – uruchamianie rozszerzenia z paska adresu Safari"
+                  class="w-full max-w-md mx-auto rounded-lg border-2 border-white/40 shadow-md"
+                  loading="lazy"
+                />
+              </div>
+            </li>
+            <li>
+              <p class="font-semibold mb-1">6. Zainstaluj skrypt w menedżerze</p>
+              <div class="space-y-2">
+                <p>Potwierdź instalację skryptu kliknięciem.</p>
+                <img
+                  src="img/IMG_0249.PNG"
+                  alt="Krok 6 – ekran potwierdzania instalacji skryptu"
+                  class="w-full max-w-md mx-auto rounded-lg border-2 border-white/40 shadow-md"
+                  loading="lazy"
+                />
+              </div>
+            </li>
+            <li>
+              <p class="font-semibold mb-1">7. Potwierdź instalację</p>
+              <div class="space-y-2">
+                <p>Potwierdź instalację kliknięciem "Install".</p>
+                <img
+                  src="img/IMG_0250.PNG"
+                  alt="Krok 7 – potwierdzenie instalacji skryptu"
+                  class="w-full max-w-md mx-auto rounded-lg border-2 border-white/40 shadow-md"
+                  loading="lazy"
+                />
+              </div>
+            </li>
+            <li>
+              <p class="font-semibold mb-1">8. Potwierdzenie działania skryptu</p>
+              <div class="space-y-2">
+                <p>Jeśli wszystko przebiegło pomyślnie, powinieneś zobaczyć potwierdzenie jak na zrzucie ekranu.</p>
+                <img
+                  src="img/IMG_0251.PNG"
+                  alt="Krok 8 – potwierdzenie działania skryptu"
+                  class="w-full max-w-md mx-auto rounded-lg border-2 border-white/40 shadow-md"
+                  loading="lazy"
+                />
+              </div>
+            </li>
+          </ol>
+          <p class="text-xs text-white/60 mt-4">
+            Gotowe. Nie wszystkie funkcje skryptów będą działać na telefonie, ze względu na inny interfejs użytkownika.
+          </p>
         </div>
       </div>
 
@@ -584,5 +772,46 @@
         </p>
       </footer>
     </div>
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        const openButtons = document.querySelectorAll("[data-modal-target]");
+        const closeButtons = document.querySelectorAll("[data-modal-close]");
+
+        function openModal(id) {
+          const modal = document.getElementById(id);
+          if (!modal) return;
+          modal.classList.remove("hidden");
+        }
+
+        function closeModal(modal) {
+          if (!modal) return;
+          modal.classList.add("hidden");
+        }
+
+        openButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            const targetId = button.getAttribute("data-modal-target");
+            if (!targetId) return;
+            openModal(targetId);
+          });
+        });
+
+        closeButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            const overlay = button.closest(".modal-overlay");
+            if (!overlay) return;
+            closeModal(overlay);
+          });
+        });
+
+        document.querySelectorAll(".modal-overlay").forEach((overlay) => {
+          overlay.addEventListener("click", (event) => {
+            if (event.target === overlay) {
+              closeModal(overlay);
+            }
+          });
+        });
+      });
+    </script>
   </body>
 </html>
