@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Builders Exporter by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.0.5
+// @version      1.0.8
 // @description  Export donor ranking and available items from the building modal to a CSV file
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -9,18 +9,27 @@
 // @match        https://*.eclesiar.com/*
 // @grant        GM_download
 // @run-at       document-idle
+// @updateURL    https://24na7.info/eclesiar-scripts/Eclesiar_Builders_by_p0tfur.user.js
+// @downloadURL  https://24na7.info/eclesiar-scripts/Eclesiar_Builders_by_p0tfur.user.js
 // ==/UserScript==
 
 (function () {
   "use strict";
+
+  // API key
+  const VER_API_KEY = "jakis-w-ch0l3r3-m0cny-kluczzzz";
 
   // Inject export buttons when the ranking toggle is present.
   // The buttons will export the donor ranking table (rank, player, points)
   // with support for lazy-loaded rows (auto-scroll until complete).
 
   const EXPORT_CSV_BTN_ID = "ec-export-ranking-csv-btn";
+  const SEND_VER_BTN_ID = "ec-send-ranking-ver-btn";
   const IS_VIVALDI = /Vivaldi/i.test(navigator.userAgent || "");
   const IS_FIREFOX = /Firefox/i.test(navigator.userAgent || "");
+
+  // Endpoint VER API (Verified Erection Report)
+  const VER_SNAPSHOT_ENDPOINT = "https://ver.rpaby.pw/api/rankings/snapshots";
 
   const safeText = (el) => (el ? (el.textContent || "").trim() : "");
 
@@ -152,6 +161,34 @@
       });
       rankingToggle.parentElement.insertBefore(csvBtn, rankingToggle.nextSibling);
     }
+
+    if (!document.getElementById(SEND_VER_BTN_ID)) {
+      const verBtn = document.createElement("button");
+      verBtn.id = SEND_VER_BTN_ID;
+      verBtn.type = "button";
+      verBtn.textContent = "Send to VER";
+      verBtn.className = "btn btn-outline-primary mb-3";
+      verBtn.style.marginLeft = "8px";
+      console.log("[Eclesiar Export] Creating VER button next to #toggle-donor-ranking");
+      verBtn.addEventListener("click", async () => {
+        try {
+          console.log("[Eclesiar Export] VER button clicked");
+          await ensureRankingVisible(document);
+          const donors = await collectAllDonors(document);
+          console.log("[Eclesiar Export] VER donors rows:", donors.length);
+          const result = await sendRankingToVer(donors);
+          console.log("[Eclesiar Export] VER API response:", result);
+          if (confirm("Ranking wysłany do VER.\n\nOtworzyć panel VER teraz?")) {
+            window.open("https://ver.rpaby.pw/", "_blank");
+          }
+        } catch (err) {
+          console.error("[Eclesiar Export] VER send failed:", err);
+          alert("Wysyłka do VER nie powiodła się: " + (err && err.message ? err.message : err));
+        }
+      });
+
+      rankingToggle.parentElement.insertBefore(verBtn, rankingToggle.nextSibling);
+    }
   }
 
   function buildFileName(ext) {
@@ -174,6 +211,59 @@
 
     const prefix = parts.length > 0 ? parts.join("_") + "_" : "";
     return `${prefix}${yyyy}-${MM}-${dd}_${hh}-${mm}-${ss}.${e}`;
+  }
+
+  function buildSnapshotPayload(donors) {
+    const { region, buildingType, level } = getPreModalBuildingDetails(document);
+
+    const capturedAt = new Date().toISOString();
+    const pageUrl = window.location.href || "";
+    const clientUserAgent = navigator.userAgent || "";
+
+    const safeLevel = level ? parseInt(String(level), 10) || 0 : 0;
+
+    const donorsPayload = (donors || []).map((d, idx) => ({
+      rank: d.rank || idx + 1,
+      player: d.player,
+      points: d.points,
+    }));
+
+    return {
+      source: "eclesiar-userscript",
+      capturedAt,
+      pageUrl,
+      clientUserAgent,
+      building: {
+        region: region || "",
+        type: buildingType || "",
+        level: safeLevel,
+      },
+      donors: donorsPayload,
+    };
+  }
+
+  async function sendRankingToVer(donors) {
+    const payload = buildSnapshotPayload(donors || []);
+    const headers = {
+      "Content-Type": "application/json",
+    };
+
+    if (VER_API_KEY) {
+      // Prosty mechanizm autoryzacji po stronie VER.
+      headers["X-VER-API-KEY"] = VER_API_KEY;
+    }
+
+    const response = await fetch(VER_SNAPSHOT_ENDPOINT, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`VER API returned HTTP ${response.status}`);
+    }
+
+    return response.json().catch(() => null);
   }
 
   function getDonorRows(scope) {

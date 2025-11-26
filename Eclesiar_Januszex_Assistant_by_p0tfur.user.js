@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Janueszex Assistant by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.0.1
+// @version      1.0.2
 // @description  Janueszex Assistant
 // @author       p0tfur
 // @match        https://eclesiar.com/*
