@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Builders Exporter by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.0.8
+// @version      1.1.0
 // @description  Export donor ranking and available items from the building modal to a CSV file
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -56,6 +56,76 @@
     } catch (_) {
       return { region: "", buildingType: "", level: "" };
     }
+  }
+
+  // Read current/required progress numbers from the building card and return null when unavailable.
+  function getBuildingProgressStatus(doc) {
+    const root = doc || document;
+    const progressSpan = root.querySelector(".building-item__progression-bar .progress-text");
+    if (!progressSpan) return null;
+    const text = safeText(progressSpan);
+    if (!text || !text.includes("/")) return null;
+
+    const [currentRaw, totalRaw] = text.split("/").map((part) => part.replace(/[^0-9]/g, ""));
+    const current = parseInt(currentRaw, 10);
+    const total = parseInt(totalRaw, 10);
+
+    if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) {
+      return null;
+    }
+
+    return { current, total };
+  }
+
+  // Ensure the build is finished before allowing VER submission.
+  function assertBuildCompleted(doc) {
+    const progress = getBuildingProgressStatus(doc);
+    if (!progress || progress.current < progress.total) {
+      alert("Budowa niezakończona, darmozjady weźcie się do pracy!");
+      return false;
+    }
+    return true;
+  }
+
+  function parsePointsValue(value) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    const raw = String(value ?? "").trim();
+    if (!raw) return 0;
+
+    const sanitized = raw
+      .replace(/\u00a0/g, "")
+      .replace(/,/g, "")
+      .replace(/[^0-9.\-]/g, "");
+    const parsed = Number.parseFloat(sanitized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function sumDonorPoints(donors) {
+    if (!Array.isArray(donors) || !donors.length) return 0;
+    return donors.reduce((sum, donor) => sum + parsePointsValue(donor && donor.points), 0);
+  }
+
+  function assertRankingCoverage(donors, doc) {
+    const progress = getBuildingProgressStatus(doc);
+    if (!progress) {
+      console.warn("[Eclesiar Export] Progress status missing, skipping coverage check");
+      return true;
+    }
+
+    const totalPoints = sumDonorPoints(donors);
+    const tolerance = Math.max(Math.round(progress.current * 0.01), 200);
+    const diff = Math.abs(progress.current - totalPoints);
+
+    if (diff > tolerance) {
+      alert(
+        `Ranking wygląda na niekompletny.\n\nSuma punktów z tabeli: ${totalPoints.toLocaleString()}\nProgress na karcie: ${progress.current.toLocaleString()}\n\nPrzewiń ranking do końca i spróbuj ponownie.`
+      );
+      return false;
+    }
+
+    return true;
   }
 
   // Make a filesystem-friendly slug
@@ -150,13 +220,16 @@
           console.log("[Eclesiar Export] CSV button clicked");
           await ensureRankingVisible(document);
           const donors = await collectAllDonors(document);
+          if (!assertRankingCoverage(donors, document)) {
+            return;
+          }
           const csv = buildCsv(donors);
           const fileName = buildFileName("csv");
           console.log("[Eclesiar Export] CSV rows:", donors.length);
           await downloadCsv(csv, fileName);
         } catch (err) {
           console.error("[Eclesiar Export] CSV export failed:", err);
-          alert("Export CSV failed: " + (err && err.message ? err.message : err));
+          alert("Eksport CSV nie powiódł się: " + (err && err.message ? err.message : err));
         }
       });
       rankingToggle.parentElement.insertBefore(csvBtn, rankingToggle.nextSibling);
@@ -173,8 +246,14 @@
       verBtn.addEventListener("click", async () => {
         try {
           console.log("[Eclesiar Export] VER button clicked");
+          if (!assertBuildCompleted(document)) {
+            return;
+          }
           await ensureRankingVisible(document);
           const donors = await collectAllDonors(document);
+          if (!assertRankingCoverage(donors, document)) {
+            return;
+          }
           console.log("[Eclesiar Export] VER donors rows:", donors.length);
           const result = await sendRankingToVer(donors);
           console.log("[Eclesiar Export] VER API response:", result);
@@ -285,7 +364,7 @@
         const playerAnchor = tds[1].querySelector("a");
         const player = safeText(playerAnchor || tds[1]);
         const pointsRaw = safeText(tds[2]);
-        const points = pointsRaw.replace(/[^0-9.,]/g, "");
+        const points = parsePointsValue(pointsRaw);
 
         donors.push({ rank, player, points });
       } catch (e) {
@@ -319,12 +398,19 @@
     }
 
     if (scrollContainer) {
+      const scrollable = scrollContainer.scrollHeight - scrollContainer.clientHeight > 5;
+      if (!scrollable) {
+        scrollContainer = null;
+      }
+    }
+
+    const initialCount = getDonorRows(modalRoot).length;
+    if (scrollContainer) {
       await autoScrollToEnd(scrollContainer, () => getDonorRows(modalRoot).length);
     }
 
-    // Fallback: if still no rows, try scroll whole window
     let count = getDonorRows(modalRoot).length;
-    if (count === 0) {
+    if (!scrollContainer || count === initialCount) {
       const box = scrollContainer || donorTable;
       await autoScrollWindowTowards(box, () => getDonorRows(modalRoot).length);
       count = getDonorRows(modalRoot).length;
@@ -345,7 +431,7 @@
         const rank = safeText(tds[i]);
         const player = safeText(tds[i + 1]);
         const pointsRaw = safeText(tds[i + 2]);
-        const points = pointsRaw.replace(/[^0-9.,]/g, "");
+        const points = parsePointsValue(pointsRaw);
         if (rank || player || points) tmp.push({ rank, player, points });
       }
       if (tmp.length > 0) {
@@ -365,18 +451,31 @@
     let lastCount = -1;
     let stableSteps = 0;
     let attempts = 0;
-    const maxAttempts = 40; // ~12s at 300ms
+    const maxAttempts = 80;
+    const step = Math.max(120, Math.floor(container.clientHeight * 0.6));
 
-    while (attempts < maxAttempts && stableSteps < 2) {
+    while (attempts < maxAttempts && stableSteps < 3) {
       attempts++;
-      container.scrollTop = container.scrollHeight;
-      await sleep(300);
+      const prevTop = container.scrollTop;
+      container.scrollTop = Math.min(container.scrollTop + step, container.scrollHeight);
+      container.dispatchEvent(new Event("scroll", { bubbles: true }));
+      if (container.scrollTop === prevTop) {
+        container.scrollTop = container.scrollHeight;
+        container.dispatchEvent(new Event("scroll", { bubbles: true }));
+      }
+
+      await sleep(250);
       const count = getCount();
       if (count === lastCount) {
         stableSteps++;
       } else {
         stableSteps = 0;
         lastCount = count;
+      }
+
+      const nearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 4;
+      if (nearBottom) {
+        stableSteps++;
       }
     }
   }
