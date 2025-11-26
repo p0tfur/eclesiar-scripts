@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Eclesiar Misc Additions
 // @namespace http://tampermonkey.net/
-// @version 1.3.8
+// @version 1.4.0
 // @description Fixed mission indicator, improved UX for energy and food indicators, added auto language detection and Polish translation, added EQ presets to build/mine views
 // @author p0tfur, based on script by ms05 + SirManiek
 // @match https://eclesiar.com/*
@@ -54,7 +54,7 @@ const CEDRU_VERSION = true;
       const style = document.createElement("style");
       style.id = "ecplus-storage-info-style";
       style.textContent = `
-        .storage-item .item-amount { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .storage-item .item-amount { display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: rgba(0, 123, 255, 0.28) !important; }
         .ec-storage-info { font-size: 12px; opacity: 0.9; margin-top: 2px; line-height: 1.2; }
         .ec-storage-info .lab { font-weight: 600; opacity: 0.95; }
         .storage-item .item-amount .ec-amount { font-weight: 700; }
@@ -1806,14 +1806,18 @@ const CEDRU_VERSION = true;
       const nowMs = Date.now();
       const currEnergy = parseInt(energyTimerElement.getAttribute("data-seconds")) || 0;
       const currFood = parseInt(foodTimerElement.getAttribute("data-seconds")) || 0;
-      // Recompute end only when counters increased (reset after game tick/interaction)
-      if (lastEnergySeconds == null || currEnergy > lastEnergySeconds) {
+      // Recompute end whenever counters change (e.g. after eating bread or using items)
+      if (lastEnergySeconds == null || currEnergy !== lastEnergySeconds) {
         energyEndAtMs = nowMs + currEnergy * 1000;
         lastEnergySeconds = currEnergy;
+        // Reset displayed countdown so relative time (in brackets) is recomputed from new end time
+        lastEnergyShownSec = null;
       }
-      if (lastFoodSeconds == null || currFood > lastFoodSeconds) {
+      if (lastFoodSeconds == null || currFood !== lastFoodSeconds) {
         foodEndAtMs = nowMs + currFood * 1000;
         lastFoodSeconds = currFood;
+        // Reset displayed countdown so relative time (in brackets) is recomputed from new end time
+        lastFoodShownSec = null;
       }
     };
     const updateFullTimeDisplaysFromTimes = () => {
