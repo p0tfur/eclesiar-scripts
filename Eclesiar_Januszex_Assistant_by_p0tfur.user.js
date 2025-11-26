@@ -16,6 +16,7 @@
 
   const CACHE_KEY = "eja_holdings";
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+  let holdingsCacheWarned = false;
 
   const onReady = (fn) => {
     if (document.readyState === "loading") {
@@ -105,11 +106,15 @@
       if (!parsed || !Array.isArray(parsed.holdings)) return [];
       const age = Date.now() - (parsed.updatedAt || 0);
       if (age > CACHE_TTL_MS) {
-        try {
-          console.debug("[EJA] holdings cache expired");
-        } catch {}
+        if (!holdingsCacheWarned) {
+          holdingsCacheWarned = true;
+          try {
+            console.debug("[EJA] holdings cache expired");
+          } catch {}
+        }
         return [];
       }
+      holdingsCacheWarned = false;
       return parsed.holdings;
     } catch {}
     return [];
