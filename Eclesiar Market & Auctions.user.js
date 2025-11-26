@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Market - Show Seller/holding Country Flag
 // @namespace    https://eclesiar.com/
-// @version      1.3.0
+// @version      1.3.5
 // @description  Show nationality flag next to seller name on /market (users and holdings via CEO), for auctions added indicators for average prices
 // @author       p0tfur
 // @match        https://eclesiar.com/market*
@@ -24,6 +24,7 @@ Display depending on the situation:
   const CACHE_KEY = "ec_market_flags_cache_v1";
   const CACHE_TTL_MS = 72 * 60 * 60 * 1000; // 72h
   const MAX_CONCURRENCY = 4;
+  const BATCH_SIZE = 3;
 
   const cache = loadCache();
   const IS_MAIN_MARKET_PAGE = location.pathname === "/market";
@@ -45,6 +46,29 @@ Display depending on the situation:
     return txt === "rynek walutowy" || txt === "currency market";
   })();
 
+  // Pre-compile selector string since page type doesn't change
+  const SELLER_SELECTORS = (() => {
+    const s = [
+      'td.column-1 a[href^="/user/"]',
+      'td.column-1 a[href^="/holding/"]',
+      'td.column-1 a[href^="/militaryunit/"]',
+    ];
+    if (IS_CURRENCY_MARKET_PAGE) {
+      s.push(
+        'td.column-0 a[href^="/user/"]',
+        'td.column-0 a[href^="/holding/"]',
+        'td.column-0 a[href^="/militaryunit/"]'
+      );
+    }
+    return s.join(", ");
+  })();
+
+  // Pre-compile regexes
+  const RE_NBSP = /\u00A0/g;
+  const RE_NOT_NUM = /[^[0-9.,-]]/g;
+  const RE_COMMA = /,/g;
+  const RE_DOT = /\./g;
+
   function loadCache() {
     try {
       const raw = localStorage.getItem(CACHE_KEY);
@@ -62,10 +86,14 @@ Display depending on the situation:
     }
   }
 
+  let saveTimeout;
   function saveCache() {
-    try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-    } catch {}
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+      } catch {}
+    }, 2000);
   }
 
   function makeAbsoluteUrl(url) {
@@ -77,21 +105,7 @@ Display depending on the situation:
   }
 
   function findSellerAnchors(root = document) {
-    const selectors = [
-      'td.column-1 a[href^="/user/"]',
-      'td.column-1 a[href^="/holding/"]',
-      'td.column-1 a[href^="/militaryunit/"]'
-    ];
-
-    if (IS_CURRENCY_MARKET_PAGE) {
-      selectors.push(
-        'td.column-0 a[href^="/user/"]',
-        'td.column-0 a[href^="/holding/"]',
-        'td.column-0 a[href^="/militaryunit/"]'
-      );
-    }
-
-    return Array.from(root.querySelectorAll(selectors.join(", ")));
+    return Array.from(root.querySelectorAll(SELLER_SELECTORS));
   }
 
   // Insert motivational banner above the quality selection row
@@ -128,6 +142,24 @@ Display depending on the situation:
     banner.style.boxShadow = "0 2px 6px rgba(0,0,0,0.15)";
     banner.style.fontFamily = '"Segoe UI", "Noto Sans", Arial, sans-serif';
 
+    const applyBannerResponsive = () => {
+      const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+      if (isMobile) {
+        banner.style.fontSize = "14px";
+        banner.style.padding = "8px 10px";
+        banner.style.flexDirection = "column";
+        banner.style.textAlign = "center";
+      } else {
+        banner.style.fontSize = "16px";
+        banner.style.padding = "10px 14px";
+        banner.style.flexDirection = "row";
+        banner.style.textAlign = "center";
+      }
+    };
+
+    applyBannerResponsive();
+    window.addEventListener("resize", applyBannerResponsive);
+
     // Add a pill with border for better text readability
     const bannerText = document.createElement("span");
     bannerText.textContent = "Kupuj polskie, wspieraj lokalnych przedsiębiorców";
@@ -139,6 +171,17 @@ Display depending on the situation:
     bannerText.style.backdropFilter = "blur(2px)";
     bannerText.style.textShadow = "0 1px 1px rgba(255,255,255,0.6), 0 -1px 1px rgba(255,255,255,0.3)";
     bannerText.style.fontFamily = '"Segoe UI", "Noto Sans", Arial, sans-serif';
+
+    const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile) {
+      bannerText.style.whiteSpace = "normal";
+      bannerText.style.lineHeight = "1.3";
+      bannerText.style.textAlign = "center";
+    } else {
+      bannerText.style.whiteSpace = "nowrap";
+      bannerText.style.lineHeight = "1.1";
+    }
+
     banner.appendChild(bannerText);
     (function () {
       const svgNS = "http://www.w3.org/2000/svg";
@@ -211,8 +254,8 @@ Display depending on the situation:
       if (!badge && (isHoldingLink || isUserLink || isMuLink)) {
         badge = document.createElement("span");
         badge.className = "ec-type-badge";
-        badge.textContent = isHoldingLink ? "[H]" : (isUserLink ? "[G]" : "[MU]");
-        badge.title = isHoldingLink ? "Holding" : (isUserLink ? "Gracz" : "Jednostka wojskowa");
+        badge.textContent = isHoldingLink ? "[H]" : isUserLink ? "[G]" : "[MU]";
+        badge.title = isHoldingLink ? "Holding" : isUserLink ? "Gracz" : "Jednostka wojskowa";
         badge.style.marginLeft = "3px";
         badge.style.fontSize = "12px";
         badge.style.fontWeight = "700";
@@ -300,32 +343,29 @@ Display depending on the situation:
 
   function parsePriceValue(text) {
     if (!text) return null;
-    const cleaned = text
-      .replace(/\u00A0/g, " ")
-      .replace(/[^[0-9.,-]]/g, "")
-      .trim();
+    const cleaned = text.replace(RE_NBSP, " ").replace(RE_NOT_NUM, "").trim();
     if (!cleaned) return null;
     const hasComma = cleaned.includes(",");
     const hasDot = cleaned.includes(".");
     if (hasComma && hasDot) {
       if (cleaned.lastIndexOf(".") > cleaned.lastIndexOf(",")) {
-        return parseFloat(cleaned.replace(/,/g, ""));
+        return parseFloat(cleaned.replace(RE_COMMA, ""));
       }
-      return parseFloat(cleaned.replace(/\./g, "").replace(",", "."));
+      return parseFloat(cleaned.replace(RE_DOT, "").replace(",", "."));
     }
     if (hasComma) {
       const parts = cleaned.split(",");
       if (parts.length === 2 && parts[1].length > 0 && parts[1].length <= 3) {
         return parseFloat(cleaned.replace(",", "."));
       }
-      return parseFloat(cleaned.replace(/,/g, ""));
+      return parseFloat(cleaned.replace(RE_COMMA, ""));
     }
     if (hasDot) {
       const segments = cleaned.split(".");
       if (segments.length === 2 && segments[1].length > 0 && segments[1].length <= 3) {
         return parseFloat(cleaned);
       }
-      return parseFloat(cleaned.replace(/\./g, ""));
+      return parseFloat(cleaned.replace(RE_DOT, ""));
     }
     return parseFloat(cleaned);
   }
@@ -398,6 +438,22 @@ Display depending on the situation:
       indicator.style.color = color;
       indicator.dataset.state = state;
       indicator.title = titleParts.join(" • ");
+    });
+  }
+
+  function scanAndDecorateAuctions(root = document) {
+    if (!IS_AUCTION_PAGE) return;
+
+    const scopes = [];
+    root.querySelectorAll(".current-best-offer").forEach((el) => {
+      const scope = el.closest(".card") || el.closest("tr") || el.closest("table");
+      if (scope && scopes.indexOf(scope) === -1) {
+        scopes.push(scope);
+      }
+    });
+
+    scopes.forEach((scope) => {
+      decorateAuctionBidButtons(scope);
     });
   }
 
@@ -534,7 +590,10 @@ Display depending on the situation:
           finalize();
           return;
         }
-        limit(() => fetchFlagForUser(href))
+        limit(() => {
+          if (!document.body.contains(anchor)) return Promise.reject("Skipped: detached");
+          return fetchFlagForUser(href);
+        })
           .then(handleResult)
           .catch(() => {})
           .finally(finalize);
@@ -547,7 +606,10 @@ Display depending on the situation:
           finalize();
           return;
         }
-        limit(() => fetchOfficerFlagForHolding(href))
+        limit(() => {
+          if (!document.body.contains(anchor)) return Promise.reject("Skipped: detached");
+          return fetchOfficerFlagForHolding(href);
+        })
           .then(handleResult)
           .catch(() => {})
           .finally(finalize);
@@ -560,7 +622,10 @@ Display depending on the situation:
           finalize();
           return;
         }
-        limit(() => fetchFlagForMilitaryUnit(href))
+        limit(() => {
+          if (!document.body.contains(anchor)) return Promise.reject("Skipped: detached");
+          return fetchFlagForMilitaryUnit(href);
+        })
           .then(handleResult)
           .catch(() => {})
           .finally(finalize);
@@ -573,12 +638,16 @@ Display depending on the situation:
 
   function scanAndInject(root = document) {
     let anchors = findSellerAnchors(root).filter((a) => !alreadyInjected(a) && a.dataset.ecFlagPending !== "1");
-    if (IS_CURRENCY_MARKET_PAGE) {
-      anchors = anchors.slice(0, 5);
-    }
+    // Process in small batches to avoid flooding headers/requests,
+    // and rely on MutationObserver (triggered by insertions) to chain the next batch.
+    anchors = anchors.slice(0, BATCH_SIZE);
+
     if (anchors.length) {
       processAnchors(anchors);
     }
+
+    // Ensure auction indicators are applied even if there are no seller anchors
+    scanAndDecorateAuctions(root);
   }
 
   // Initial run
@@ -600,7 +669,7 @@ Display depending on the situation:
       observer._t = setTimeout(() => {
         scanAndInject();
         insertMotivationBanner();
-      }, 150);
+      }, 300);
     }
   });
 
