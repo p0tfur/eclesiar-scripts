@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Builders Exporter by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Export donor ranking and available items from the building modal to a CSV file
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -569,4 +569,213 @@
     childList: true,
     subtree: true,
   });
+
+  // ============================================================
+  // Build Button Interceptor for /country/ruler/government/buildingorders
+  // Shows confirmation dialog asking if user sent data to VER before building
+  // ============================================================
+
+  /**
+   * Check if current page is the building orders page
+   * @returns {boolean}
+   */
+  function isBuildingOrdersPage() {
+    const path = window.location.pathname || "";
+    return path.includes("/country/ruler/government/buildingorders");
+  }
+
+  /**
+   * Show custom confirmation dialog asking about VER submission
+   * @returns {Promise<boolean>} - true if user clicked "Tak", false if "Nie"
+   */
+  function showVerConfirmDialog() {
+    return new Promise((resolve) => {
+      // Create overlay
+      const overlay = document.createElement("div");
+      overlay.id = "ver-confirm-overlay";
+      overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 99999;
+      `;
+
+      // Create dialog box
+      const dialog = document.createElement("div");
+      dialog.style.cssText = `
+        background: #fff;
+        border-radius: 8px;
+        padding: 24px 32px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        text-align: center;
+        max-width: 400px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      `;
+
+      // Question text
+      const question = document.createElement("p");
+      const question2 = document.createElement("p");
+      question.textContent = "Czy wysyłałeś dane do VER?";
+      question2.textContent = "Jeśli nie wysłałeś to przepadną!";
+      question.style.cssText = `
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 0 0 0;
+        color: #333;
+      `;
+      question2.style.cssText = `
+        font-size: 14px;
+        font-weight: 600;
+         margin: 0 0 20px 0;
+        color: #333;
+      `;
+
+      // Button container
+      const buttonContainer = document.createElement("div");
+      buttonContainer.style.cssText = `
+        display: flex;
+        justify-content: center;
+        gap: 16px;
+      `;
+
+      // "Tak" button (Yes)
+      const yesBtn = document.createElement("button");
+      yesBtn.textContent = "Tak";
+      yesBtn.style.cssText = `
+        padding: 10px 32px;
+        font-size: 16px;
+        font-weight: 500;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        background: #28a745;
+        color: #fff;
+        transition: background 0.2s;
+      `;
+      yesBtn.onmouseover = () => (yesBtn.style.background = "#218838");
+      yesBtn.onmouseout = () => (yesBtn.style.background = "#28a745");
+
+      // "Nie" button (No)
+      const noBtn = document.createElement("button");
+      noBtn.textContent = "Nie";
+      noBtn.style.cssText = `
+        padding: 10px 32px;
+        font-size: 16px;
+        font-weight: 500;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        background: #dc3545;
+        color: #fff;
+        transition: background 0.2s;
+      `;
+      noBtn.onmouseover = () => (noBtn.style.background = "#c82333");
+      noBtn.onmouseout = () => (noBtn.style.background = "#dc3545");
+
+      // Event handlers
+      const cleanup = () => {
+        if (overlay.parentNode) {
+          overlay.parentNode.removeChild(overlay);
+        }
+      };
+
+      yesBtn.addEventListener("click", () => {
+        cleanup();
+        resolve(true);
+      });
+
+      noBtn.addEventListener("click", () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // Close on overlay click (outside dialog) - treat as "Nie"
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      // Assemble dialog
+      buttonContainer.appendChild(yesBtn);
+      buttonContainer.appendChild(noBtn);
+      dialog.appendChild(question);
+      dialog.appendChild(question2);
+      dialog.appendChild(buttonContainer);
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      // Focus "Tak" button for keyboard accessibility
+      yesBtn.focus();
+    });
+  }
+
+  /**
+   * Intercept clicks on "Buduj"/"Build" buttons on the building orders page
+   */
+  function setupBuildButtonInterceptor() {
+    if (!isBuildingOrdersPage()) {
+      return;
+    }
+
+    console.log("[Eclesiar Export] Setting up build button interceptor on building orders page");
+
+    // Use event delegation on document to catch dynamically added buttons
+    document.addEventListener(
+      "click",
+      async (event) => {
+        const target = event.target;
+
+        // Check if clicked element is the "Buduj"/"Build" button
+        // Button has class "btn-finish-building" and data attributes
+        if (target && target.tagName === "BUTTON" && target.classList.contains("btn-finish-building")) {
+          // Skip if this click was already confirmed
+          if (target.dataset.verConfirmed === "true") {
+            console.log("[Eclesiar Export] Allowing confirmed build action");
+            // Clean up the flag after allowing through
+            setTimeout(() => {
+              delete target.dataset.verConfirmed;
+            }, 100);
+            return; // Let the click proceed
+          }
+
+          const buttonText = (target.textContent || "").trim().toLowerCase();
+
+          // Verify it's the build button (Buduj or Build)
+          if (buttonText === "buduj" || buttonText === "build") {
+            console.log("[Eclesiar Export] Build button clicked, showing VER confirmation");
+
+            // Prevent the default action and stop propagation
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+
+            // Show confirmation dialog
+            const confirmed = await showVerConfirmDialog();
+
+            if (confirmed) {
+              console.log("[Eclesiar Export] User confirmed VER submission, proceeding with build");
+              // Set flag and re-trigger the click
+              target.dataset.verConfirmed = "true";
+              target.click();
+            } else {
+              console.log("[Eclesiar Export] User did not confirm VER submission, cancelling build");
+              // Do nothing - action cancelled
+            }
+          }
+        }
+      },
+      true // Use capture phase to intercept before other handlers
+    );
+  }
+
+  // Initialize build button interceptor
+  setupBuildButtonInterceptor();
 })();
