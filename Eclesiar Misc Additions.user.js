@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Eclesiar Misc Additions
 // @namespace http://tampermonkey.net/
-// @version 1.4.0
+// @version 1.4.2
 // @description Fixed mission indicator, improved UX for energy and food indicators, added auto language detection and Polish translation, added EQ presets to build/mine views
 // @author p0tfur, based on script by ms05 + SirManiek
 // @match https://eclesiar.com/*
@@ -358,6 +358,158 @@ const CEDRU_VERSION = true;
     } catch (e) {
       warn("Failed to observe party targets: " + e);
     }
+  }
+
+  function addWarEffectsSummaryStyles() {
+    try {
+      const styleId = "ecplus-war-effects-style";
+      if (document.getElementById(styleId)) return;
+      const style = document.createElement("style");
+      style.id = styleId;
+      style.textContent = `
+        .ec-war-effects-summary { margin-top: 4px; line-height: 1.15; font-size: 12px; opacity: 0.95; background: rgba(0, 0, 0, 0.3);}
+        .ec-war-effects-summary .lab { font-weight: 700; }
+        .ec-war-effects-summary .pos { color: #16a34a; font-weight: 700; }
+        .ec-war-effects-summary .neg { color: #dc2626; font-weight: 700; }
+      `;
+      document.head.appendChild(style);
+    } catch {}
+  }
+
+  function parseWarEffectsTooltip() {
+    try {
+      const tooltip = document.querySelector(".c-tooltip.map-type-info .tooltip-content");
+      if (!tooltip) return null;
+
+      const norm = (s) => {
+        try {
+          return String(s || "")
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        } catch {
+          return String(s || "")
+            .toLowerCase()
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+      };
+
+      const acc = {
+        attackers: { plus: 0, minus: 0 },
+        defenders: { plus: 0, minus: 0 },
+      };
+
+      const getSideFromText = (tRaw) => {
+        const t = norm(tRaw);
+        if (/(atakuj|attacker|attackers|attacking)/i.test(t)) return "attackers";
+        if (/(obron|defender|defenders|defense)/i.test(t)) return "defenders";
+        if (/(obrazen.*ataku)|(obrazen.*do ataku)|(do ataku)|(damage.*to attack)|(attack.*damage)/i.test(t))
+          return "attackers";
+        if (/(obrazen.*obron)|(obrazen.*do obron)|(damage.*to defen)|(defen.*damage)/i.test(t)) return "defenders";
+        if (/(do celnosci.*obro)|(accuracy.*defen)|(for\s+defen)/i.test(t)) return "defenders";
+        return null;
+      };
+
+      const inferSign = (tRaw) => {
+        const t = norm(tRaw);
+        if (/(-|minus|mniej|redukc|zmniejsz|reduced|less|decreas)/i.test(t)) return -1;
+        if (/(\+|plus|wiecej|zwieksz|increased|more)/i.test(t)) return 1;
+        return 1;
+      };
+
+      const isDamageRelated = (tRaw) => {
+        const t = norm(tRaw);
+        return /(obrazen|damage)/i.test(t);
+      };
+
+      const rows = Array.from(tooltip.querySelectorAll("p"));
+      for (const p of rows) {
+        const txt = (p.textContent || "").replace(/\s+/g, " ").trim();
+        if (!txt) continue;
+
+        // We only care about damage modifiers. Ignore accuracy/energy/other effects.
+        if (!isDamageRelated(txt)) continue;
+
+        const side = getSideFromText(txt);
+        const matches = txt.matchAll(/([+-]?\d+(?:[\.,]\d+)?)\s*%/g);
+        for (const m of matches) {
+          const raw = m[1];
+          const num = parseFloat(String(raw).replace(/,/g, "."));
+          if (!isFinite(num)) continue;
+
+          let sign = 1;
+          if (String(raw).trim().startsWith("-")) sign = -1;
+          else if (String(raw).trim().startsWith("+")) sign = 1;
+          else sign = inferSign(txt);
+
+          if (!side) continue;
+          if (sign >= 0) acc[side].plus += Math.abs(num);
+          else acc[side].minus += Math.abs(num);
+        }
+      }
+
+      const round1 = (v) => Math.round(v * 10) / 10;
+      return {
+        attackers: { plus: round1(acc.attackers.plus), minus: round1(acc.attackers.minus) },
+        defenders: { plus: round1(acc.defenders.plus), minus: round1(acc.defenders.minus) },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function ensureWarEffectsSummary() {
+    try {
+      if (!/^\/war\/[0-9]+(?:\/|$)/.test(location.pathname)) return;
+      addWarEffectsSummaryStyles();
+
+      const effects = parseWarEffectsTooltip();
+      if (!effects) return;
+
+      const cols = Array.from(document.querySelectorAll("div.col-4.text-center.text-uppercase"));
+      const host = cols.find((el) => el.querySelector('a[href^="/region/"][href$="/details"]'));
+      if (!host) return;
+
+      const id = "ec-war-effects-summary";
+      let box = host.querySelector(`#${id}`);
+      if (!box) {
+        box = document.createElement("div");
+        box.id = id;
+        box.className = "ec-war-effects-summary";
+        host.appendChild(box);
+      }
+
+      const fmtNet = (s) => {
+        const net = (s.plus || 0) - (s.minus || 0);
+        const v = Math.round(net * 10) / 10;
+        const txt = `${v >= 0 ? "+" : ""}${String(v.toFixed(1)).replace(/\.0$/, "")}%`;
+        const cls = v >= 0 ? "pos" : "neg";
+        return `<span class="${cls}">${txt}</span>`;
+      };
+
+      const atkLab = "ATK";
+      const defLab = "DEF";
+      const nextHtml = `<span class="lab">${atkLab}:</span> ${fmtNet(
+        effects.attackers
+      )}&nbsp;&nbsp;<span class="lab">${defLab}:</span> ${fmtNet(effects.defenders)}`;
+      if (box.innerHTML !== nextHtml) box.innerHTML = nextHtml;
+    } catch {}
+  }
+
+  function observeWarPage() {
+    try {
+      if (!/^\/war\/[0-9]+(?:\/|$)/.test(location.pathname)) return;
+      const target = document.body || document.documentElement || document;
+      const onMut = debounce(() => {
+        ensureWarEffectsSummary();
+      }, 200);
+      const obs = new MutationObserver(onMut);
+      obs.observe(target, { childList: true, subtree: true, characterData: true });
+      ensureWarEffectsSummary();
+    } catch {}
   }
 
   function addPartyButtonsStyles() {
@@ -1882,6 +2034,7 @@ const CEDRU_VERSION = true;
       localizeMergePanelAndHideOriginal();
       observePresetTargets();
       observePartyTargets();
+      observeWarPage();
       observeStoragePage();
       observeModalStorages();
 
@@ -1922,6 +2075,7 @@ const CEDRU_VERSION = true;
     localizeMergePanelAndHideOriginal();
     observePresetTargets();
     observePartyTargets();
+    observeWarPage();
     observeStoragePage();
     observeModalStorages();
 
