@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Eclesiar Market - Show Seller/holding Country Flag
 // @namespace    https://eclesiar.com/
-// @version      1.3.5
+// @version      1.3.7
 // @description  Show nationality flag next to seller name on /market (users and holdings via CEO), for auctions added indicators for average prices
 // @author       p0tfur
 // @match        https://eclesiar.com/market*
+// @match        https://eclesiar.com/militaryunit/*
 // @updateURL    https://24na7.info/eclesiar-scripts/Eclesiar Market & Auctions.user.js
 // @downloadURL  https://24na7.info/eclesiar-scripts/Eclesiar Market & Auctions.user.js
 // @run-at       document-end
@@ -46,6 +47,19 @@ Display depending on the situation:
     return txt === "rynek walutowy" || txt === "currency market";
   })();
 
+  const IS_SELL_PAGE = location.pathname === "/market/sell";
+  const IS_AUCTION_OR_COIN_PAGE =
+    location.pathname.startsWith("/market/auction") ||
+    (location.pathname.startsWith("/market/coin/") && location.pathname.includes("/advanced"));
+  const IS_MU_PAGE = location.pathname.startsWith("/militaryunit/");
+
+  // Pre-compile regexes
+  const RE_NBSP = /\u00A0/g;
+  const RE_NOT_NUM = /[^[0-9.,-]]/g;
+  const RE_COMMA = /,/g;
+  const RE_DOT = /\./g;
+  const RE_MULTIPLIER = /[x*]/i;
+
   // Pre-compile selector string since page type doesn't change
   const SELLER_SELECTORS = (() => {
     const s = [
@@ -63,11 +77,66 @@ Display depending on the situation:
     return s.join(", ");
   })();
 
-  // Pre-compile regexes
-  const RE_NBSP = /\u00A0/g;
-  const RE_NOT_NUM = /[^[0-9.,-]]/g;
-  const RE_COMMA = /,/g;
-  const RE_DOT = /\./g;
+  // Allow simple multiplication expressions in numeric inputs (e.g. "4x50" => 200)
+  function parseMultiplication(value) {
+    if (value === null || value === undefined) return null;
+    const trimmed = String(value).trim();
+    if (!trimmed) return null;
+    const compact = trimmed.replace(/\s+/g, "");
+    const parts = compact.split(RE_MULTIPLIER).filter((p) => p.length);
+    // No multiplier symbol present: treat as normal number
+    if (parts.length === 1 && !RE_MULTIPLIER.test(compact)) {
+      const num = Number(compact);
+      return Number.isFinite(num) ? num : null;
+    }
+    if (!parts.length) return null;
+    let product = 1;
+    for (const part of parts) {
+      const num = Number(part.replace(",", "."));
+      if (!Number.isFinite(num)) return null;
+      product *= num;
+    }
+    return product;
+  }
+
+  function enableMultiplicationInputs(root = document) {
+    const selectors = [];
+    if (IS_SELL_PAGE) selectors.push("#sell-amount");
+    if (IS_AUCTION_OR_COIN_PAGE) selectors.push(".amount_to_buy");
+    if (IS_MU_PAGE) selectors.push('input.quantity-input[name="quantity-input[]"]');
+
+    selectors.forEach((selector) => {
+      root.querySelectorAll(selector).forEach((input) => {
+        if (input.dataset.ecMultiplicationBound === "1") return;
+        input.dataset.ecMultiplicationBound = "1";
+
+        const originalType = input.getAttribute("type") || "text";
+        const toNumberType = () => input.setAttribute("type", "number");
+        const toTextType = () => input.setAttribute("type", "text");
+
+        const applyProduct = () => {
+          const product = parseMultiplication(input.value);
+          if (product === null || Number.isNaN(product)) return;
+          input.value = product;
+          toNumberType();
+        };
+
+        // Allow entering expressions by using text type while focused
+        input.addEventListener("focus", () => {
+          toTextType();
+          input.setAttribute("inputmode", "decimal");
+        });
+        input.addEventListener("blur", () => {
+          applyProduct();
+          input.setAttribute("type", originalType === "number" ? "number" : originalType);
+        });
+        input.addEventListener("change", applyProduct);
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") applyProduct();
+        });
+      });
+    });
+  }
 
   function loadCache() {
     try {
@@ -653,6 +722,7 @@ Display depending on the situation:
   // Initial run
   scanAndInject();
   insertMotivationBanner();
+  enableMultiplicationInputs();
 
   // Re-run on DOM changes (pagination, infinite loads, filters)
   const observer = new MutationObserver((mutations) => {
@@ -669,6 +739,7 @@ Display depending on the situation:
       observer._t = setTimeout(() => {
         scanAndInject();
         insertMotivationBanner();
+        enableMultiplicationInputs();
       }, 300);
     }
   });
@@ -682,6 +753,7 @@ Display depending on the situation:
       setTimeout(() => {
         scanAndInject();
         insertMotivationBanner();
+        enableMultiplicationInputs();
       }, 400);
     }
   });
