@@ -2100,5 +2100,192 @@ const CEDRU_VERSION = true;
     }
 
     adjustTopSideUserHeight();
+
+    ////////// CHRISTMAS EVENT //////////
+    function initChristmasEvent() {
+      try {
+        log("Initializing Christmas Event...");
+
+        // SVGs for gifts
+        const GIFT_SVGS = {
+          pink: `<svg viewBox="0 0 512 512" width="24" height="24" style="filter: drop-shadow(0 0 5px #ff69b4); cursor: pointer; transition: transform 0.2s;">
+            <path fill="#ff69b4" d="M40 120h432v80H40z"></path>
+            <path fill="#d63384" d="M64 200h384v272H64z"></path>
+            <path fill="#ffeb3b" d="M232 200h48v272h-48z"></path>
+            <path fill="#ffeb3b" d="M232 120h48v80h-48z"></path>
+            <path fill="#ffeb3b" d="M200 40h112v80H200z"></path>
+            <path fill="#ff69b4" d="M120 40h272v20H120z"></path>
+            <circle cx="256" cy="80" r="30" fill="#ffeb3b"></circle>
+          </svg>`,
+          blue: `<svg viewBox="0 0 512 512" width="24" height="24" style="filter: drop-shadow(0 0 5px #00bfff); cursor: pointer; transition: transform 0.2s;">
+            <path fill="#00bfff" d="M40 120h432v80H40z"></path>
+            <path fill="#0091ea" d="M64 200h384v272H64z"></path>
+            <path fill="#e0f7fa" d="M232 200h48v272h-48z"></path>
+            <path fill="#e0f7fa" d="M232 120h48v80h-48z"></path>
+            <path fill="#e0f7fa" d="M200 40h112v80H200z"></path>
+            <path fill="#00bfff" d="M120 40h272v20H120z"></path>
+            <circle cx="256" cy="80" r="30" fill="#e0f7fa"></circle>
+          </svg>`,
+          green: `<svg viewBox="0 0 512 512" width="24" height="24" style="filter: drop-shadow(0 0 5px #32cd32); cursor: pointer; transition: transform 0.2s;">
+            <path fill="#32cd32" d="M40 120h432v80H40z"></path>
+            <path fill="#228b22" d="M64 200h384v272H64z"></path>
+            <path fill="#ff0000" d="M232 200h48v272h-48z"></path>
+            <path fill="#ff0000" d="M232 120h48v80h-48z"></path>
+            <path fill="#ff0000" d="M200 40h112v80H200z"></path>
+            <path fill="#32cd32" d="M120 40h272v20H120z"></path>
+            <circle cx="256" cy="80" r="30" fill="#ff0000"></circle>
+          </svg>`,
+        };
+
+        const PAGES = {
+          passionce: "file:///C:/Users/pllo2pwe/Documents/eclesiar-scripts/christmas-pages/passionce.html",
+          p0tfur: "file:///C:/Users/pllo2pwe/Documents/eclesiar-scripts/christmas-pages/p0tfur.html",
+          reinspire: "file:///C:/Users/pllo2pwe/Documents/eclesiar-scripts/christmas-pages/reinspire.html"
+        };
+
+        const LOCATIONS = [
+          // 1. Battlepass (Passionce)
+          {
+            path: /^\/battlepass/i,
+            selector: ".battle-pass__tier--item.mt-5 .battle-pass__tier-item",
+            color: "pink",
+            url: PAGES.passionce,
+            uniqueId: "gift-bp-1"
+          },
+          // 2. API (Passionce)
+          {
+            path: /^\/api/i,
+            selector: "h3.mb-0",
+            color: "pink",
+            url: PAGES.passionce,
+            uniqueId: "gift-api-2"
+          },
+          // 3. Statistics (Passionce)
+          {
+            path: /^\/statistics\/citizen\/0\/damage/i,
+            selector: ".filter-area",
+            color: "pink",
+            url: PAGES.passionce,
+            uniqueId: "gift-stats-3"
+          },
+          // 4. Market Jobs (p0tfur)
+          {
+            path: /^\/market\/jobs\/offers/i,
+            selector: ".pagination",
+            color: "blue",
+            url: PAGES.p0tfur,
+            uniqueId: "gift-jobs-4"
+          },
+          // 5. Battles Finished (p0tfur)
+          {
+            path: /^\/battles\/finished/i,
+            selector: "h1",
+            color: "blue",
+            url: PAGES.p0tfur,
+            uniqueId: "gift-battles-5"
+          },
+          // 6. University (p0tfur)
+          {
+            path: /^\/university/i,
+            selector: ".business-header .flex-grow-1",
+            color: "blue",
+            url: PAGES.p0tfur,
+            uniqueId: "gift-uni-6"
+          },
+          // 7. Contracts (ReInspire)
+          {
+            path: /^\/contracts/i,
+            selector: ".content-header .col-12 h1",
+            color: "green",
+            url: PAGES.reinspire,
+            uniqueId: "gift-contracts-7"
+          },
+          // 8. Market Gold (ReInspire) - REPLACE ITEM
+          {
+            path: /^\/market\/gold/i,
+            selector: "img[src*='12359.png']",
+            color: "green",
+            url: PAGES.reinspire,
+            uniqueId: "gift-gold-8",
+            mode: "replace"
+          },
+          // 9. Referals (ReInspire)
+          {
+            path: /^\/referals/i,
+            // Targeting the div that contains "Ekwipunek T1" text roughly
+            selector: "div",
+            filter: (el) => el.textContent.includes("Ekwipunek T1") && el.querySelector("p"),
+            color: "green",
+            url: PAGES.reinspire,
+            uniqueId: "gift-ref-9"
+          }
+        ];
+
+        function createGiftElement(def) {
+          const wrapper = document.createElement("a");
+          wrapper.href = def.url;
+          wrapper.target = "_blank";
+          wrapper.className = "ec-christmas-gift";
+          wrapper.innerHTML = GIFT_SVGS[def.color];
+          wrapper.style.display = "inline-block";
+          wrapper.style.margin = "0 10px";
+          wrapper.style.textDecoration = "none";
+          wrapper.style.position = "relative";
+          wrapper.style.zIndex = "999";
+          wrapper.title = "Kliknij mnie! / Click me!";
+          wrapper.setAttribute("data-gift-id", def.uniqueId);
+
+          // Add hover animation
+          wrapper.onmouseover = () => { wrapper.querySelector("svg").style.transform = "scale(1.2) rotate(10deg)"; };
+          wrapper.onmouseout = () => { wrapper.querySelector("svg").style.transform = "scale(1) rotate(0deg)"; };
+          
+          return wrapper;
+        }
+
+        function checkAndInject() {
+          const currentPath = window.location.pathname;
+          
+          LOCATIONS.forEach(def => {
+            if (!def.path.test(currentPath)) return;
+            if (document.querySelector(`[data-gift-id="${def.uniqueId}"]`)) return; // Already injected
+
+            let target = null;
+            if (def.filter) {
+               // Find by selector then filter
+               const candidates = document.querySelectorAll(def.selector);
+               target = Array.from(candidates).find(def.filter);
+            } else {
+               target = document.querySelector(def.selector);
+            }
+
+            if (!target) return;
+
+            log(`Injecting Christmas gift: ${def.uniqueId}`);
+            
+            const gift = createGiftElement(def);
+
+            if (def.mode === "replace") {
+              // Specifically for the gold market item
+              target.style.display = "none";
+              // Insert gift where image was
+              target.parentNode.insertBefore(gift, target);
+            } else {
+              // Default append
+              target.appendChild(gift);
+            }
+          });
+        }
+
+        // Run periodically to handle SPA
+        setInterval(checkAndInject, 1000);
+        checkAndInject(); // Initial run
+
+      } catch (e) {
+        warn("Christmas Event Error: " + e);
+      }
+    }
+
+    initChristmasEvent();
+    /////////////////////////////////////
   }
 })();

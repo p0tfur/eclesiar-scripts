@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Świąteczny Prezent - P0tfur</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: radial-gradient(circle at center, #1a2a6c, #b21f1f, #fdbb2d); /* Fallback */
+            background: linear-gradient(to bottom, #0f2027, #203a43, #2c5364);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+
+        .frost-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            background: url('data:image/svg+xml;utf8,<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><filter id="noise"><feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/></filter><rect width="100" height="100" filter="url(%23noise)" opacity="0.1"/></svg>');
+            opacity: 0.3;
+            z-index: 1;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            padding: 3rem;
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            text-align: center;
+            max-width: 450px;
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+            z-index: 10;
+            position: relative;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            text-shadow: 0 0 10px rgba(0, 191, 255, 0.7);
+            background: linear-gradient(to right, #4facfe 0%, #00f2fe 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p {
+            font-size: 1.1rem;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+            color: #e0f7fa;
+        }
+
+        .owner {
+            color: #4facfe;
+            font-weight: bold;
+            font-size: 1.3rem;
+            text-shadow: 0 0 5px rgba(79, 172, 254, 0.5);
+        }
+
+        .gift-box {
+            font-size: 5rem;
+            margin-bottom: 1.5rem;
+            display: inline-block;
+            filter: drop-shadow(0 0 15px rgba(0, 242, 254, 0.6));
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0% { transform: translateY(0px) rotate(0deg); }
+            50% { transform: translateY(-15px) rotate(2deg); }
+            100% { transform: translateY(0px) rotate(0deg); }
+        }
+
+        .discord-btn {
+            background: linear-gradient(45deg, #2196F3, #21CBF3);
+            color: white;
+            text-decoration: none;
+            padding: 15px 30px;
+            border-radius: 30px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            box-shadow: 0 5px 15px rgba(33, 203, 243, 0.3);
+            transition: all 0.3s ease;
+            display: inline-block;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .discord-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 8px 25px rgba(33, 203, 243, 0.5);
+            background: linear-gradient(45deg, #21CBF3, #2196F3);
+        }
+
+        .sparkle {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            animation: twinkle 1.5s infinite ease-in-out;
+        }
+
+        @keyframes twinkle {
+            0%, 100% { opacity: 0; transform: scale(0.5); }
+            50% { opacity: 1; transform: scale(1.2); }
+        }
+
+    </style>
+</head>
+<body>
+    <div class="frost-overlay"></div>
+    <div class="card" id="card">
+        <div class="gift-box">🧊</div>
+        <h1>Zimowy Skarb!</h1>
+        <p>Brrr! Trafiłeś do mroźnej kryjówki <span class="owner">p0tfur</span>'a!</p>
+        <p>Odkryłeś ukryty prezent. Aby go odebrać, musisz się pośpieszyć, zanim zamarznie!</p>
+        <p>Napisz na Discord do właściciela ze słowami: <br><em>"Lód został przełamany"</em></p>
+        <a href="https://discord.com" target="_blank" class="discord-btn">Odbierz Prezent</a>
+        <p>Pospiesz się, bo liczba prezentów jest oganiczona!</p>
+    </div>
+
+    <script>
+        // Create sparkles
+        function createSparkles() {
+            const card = document.getElementById('card');
+            for(let i=0; i<10; i++) {
+                const sparkle = document.createElement('div');
+                sparkle.classList.add('sparkle');
+                const size = Math.random() * 4 + 2;
+                sparkle.style.width = size + 'px';
+                sparkle.style.height = size + 'px';
+                sparkle.style.left = Math.random() * 100 + '%';
+                sparkle.style.top = Math.random() * 100 + '%';
+                sparkle.style.animationDelay = Math.random() * 2 + 's';
+                card.appendChild(sparkle);
+            }
+        }
+        createSparkles();
+    </script>
+</body>
+</html>
