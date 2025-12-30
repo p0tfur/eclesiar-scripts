@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Eclesiar - Export Player Companies to CSV
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Pobiera wszystkich graczy z rankingu ekonomicznego i ich firmy, eksportuje do CSV
-// @author       You
+// @author       p0tfur
 // @match        https://eclesiar.com/statistics/*
+// @updateURL    https://24na7.info/eclesiar-scripts/companies.user.js
+// @downloadURL  https://24na7.info/eclesiar-scripts/companies.user.js
 // @grant        none
 // ==/UserScript==
 
@@ -21,7 +23,14 @@
     BASE_URL: "https://eclesiar.com",
     // Maksymalna liczba stron do pobrania (0 = wszystkie)
     MAX_PAGES: 0,
+    // Zakres rankingu: 18 = Polska, 0 = Global
+    RANKING_SCOPE_ID: 18,
   };
+
+  const RANKING_OPTIONS = [
+    { id: 0, label: "🌍 Global" },
+    { id: 18, label: "🇵🇱 Polska" },
+  ];
 
   // ============================================
   // GŁÓWNE FUNKCJE
@@ -288,7 +297,9 @@
     try {
       // Pobierz pierwszą stronę żeby określić liczbę stron
       updateStatus("Pobieranie pierwszej strony...");
-      const firstPageHtml = await fetchPage(`${CONFIG.BASE_URL}/statistics/citizen/18/economicskill/1`);
+      const firstPageHtml = await fetchPage(
+        `${CONFIG.BASE_URL}/statistics/citizen/${CONFIG.RANKING_SCOPE_ID}/economicskill/1`
+      );
 
       if (!firstPageHtml) {
         updateStatus("Błąd: Nie można pobrać pierwszej strony");
@@ -320,7 +331,9 @@
           pageDoc = firstPageDoc;
         } else {
           await delay(CONFIG.REQUEST_DELAY);
-          const pageHtml = await fetchPage(`${CONFIG.BASE_URL}/statistics/citizen/18/economicskill/${currentPage}`);
+          const pageHtml = await fetchPage(
+            `${CONFIG.BASE_URL}/statistics/citizen/${CONFIG.RANKING_SCOPE_ID}/economicskill/${currentPage}`
+          );
           if (!pageHtml) {
             console.error(`Nie można pobrać strony ${currentPage}`);
             currentPage++;
@@ -444,6 +457,38 @@
             word-wrap: break-word;
         `;
     container.appendChild(status);
+
+    // Zakres rankingu
+    const selectWrapper = document.createElement("div");
+    selectWrapper.style.cssText = "margin-bottom: 10px;";
+    const selectLabel = document.createElement("label");
+    selectLabel.textContent = "Zakres rankingu";
+    selectLabel.style.cssText = "display:block;font-size:12px;margin-bottom:4px;";
+    const select = document.createElement("select");
+    select.style.cssText = `
+            width: 100%;
+            padding: 6px;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: #12171c;
+            color: #fff;
+        `;
+    RANKING_OPTIONS.forEach((option) => {
+      const opt = document.createElement("option");
+      opt.value = option.id;
+      opt.textContent = option.label;
+      if (option.id === CONFIG.RANKING_SCOPE_ID) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+    select.addEventListener("change", (event) => {
+      CONFIG.RANKING_SCOPE_ID = Number(event.target.value);
+      updateStatus(`Wybrano zakres: ${event.target.selectedOptions[0].textContent}`);
+    });
+    selectWrapper.appendChild(selectLabel);
+    selectWrapper.appendChild(select);
+    container.appendChild(selectWrapper);
 
     // Przycisk
     const button = document.createElement("button");

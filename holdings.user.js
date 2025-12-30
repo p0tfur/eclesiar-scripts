@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Eclesiar - Export Holdings to CSV
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.2.2
 // @description  Pobiera dane holdingów (1-769) i ich firmy, zapisuje do CSV
 // @author       p0tfur
 // @match        https://eclesiar.com/holding/*
+// @updateURL    https://24na7.info/eclesiar-scripts/holdings.user.js
+// @downloadURL  https://24na7.info/eclesiar-scripts/holdings.user.js
 // @grant        none
 // ==/UserScript==
 

@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name Eclesiar Misc Additions
 // @namespace http://tampermonkey.net/
-// @version 1.4.4
+// @version 1.4.6
 // @description Fixed mission indicator, improved UX for energy and food indicators, added auto language detection and Polish translation, added EQ presets to build/mine views
 // @author p0tfur, based on script by ms05 + SirManiek
 // @match https://eclesiar.com/*
 // @updateURL    https://24na7.info/eclesiar-scripts/Eclesiar Misc Additions.user.js
 // @downloadURL  https://24na7.info/eclesiar-scripts/Eclesiar Misc Additions.user.js
-// @grant none
+// @grant GM_xmlhttpRequest
+// @connect 24na7.info
 // ==/UserScript==
 
 ////////// USER CONFIG //////////
@@ -367,7 +368,15 @@ const CEDRU_VERSION = true;
       const style = document.createElement("style");
       style.id = styleId;
       style.textContent = `
-        .ec-war-effects-summary { margin-top: 4px; line-height: 1.15; font-size: 12px; opacity: 0.95; background: rgba(0, 0, 0, 0.3);}
+        .ec-war-effects-summary { 
+          margin-top: 4px; 
+          line-height: 1.15; 
+          font-size: 12px; 
+          opacity: 0.95; 
+          background: rgba(0, 0, 0, 0.3);
+          position: relative;
+          z-index: 100;
+        }
         .ec-war-effects-summary .lab { font-weight: 700; }
         .ec-war-effects-summary .pos { color: #16a34a; font-weight: 700; }
         .ec-war-effects-summary .neg { color: #dc2626; font-weight: 700; }
@@ -2019,8 +2028,92 @@ const CEDRU_VERSION = true;
   }
 
   ////////// CHRISTMAS EVENT //////////
-  function initChristmasEvent() {
+  // Remote config URL for enabling/disabling the event
+  const CHRISTMAS_EVENT_CONFIG_URL = "https://24na7.info/eclesiar-scripts/christmas-event-config.txt";
+  // Cache duration in milliseconds (1 hour) to avoid repeated fetches
+  const CHRISTMAS_CONFIG_CACHE_MS = 60 * 60 * 1000;
+
+  // Track interval/observer IDs for cleanup when all gifts are injected
+  let christmasUrlCheckInterval = null;
+  let christmasFallbackInterval = null;
+  let christmasObserver = null;
+
+  // Check remote config to see if Christmas event is enabled
+  // Uses GM_xmlhttpRequest to bypass CORS restrictions
+  function isChristmasEventEnabled() {
+    return new Promise((resolve) => {
+      try {
+        // Check localStorage cache first
+        const cached = localStorage.getItem("ecPlus.christmasEventEnabled");
+        const cachedTime = localStorage.getItem("ecPlus.christmasEventCacheTime");
+        const now = Date.now();
+
+        // Use cache if valid and not expired
+        if (cached !== null && cachedTime && now - parseInt(cachedTime, 10) < CHRISTMAS_CONFIG_CACHE_MS) {
+          log("Christmas Event config from cache: " + cached);
+          resolve(cached === "true");
+          return;
+        }
+
+        // Check if GM_xmlhttpRequest is available (Tampermonkey/Greasemonkey)
+        if (typeof GM_xmlhttpRequest === "undefined") {
+          warn("GM_xmlhttpRequest not available, defaulting to enabled");
+          resolve(true);
+          return;
+        }
+
+        // Fetch remote config using GM_xmlhttpRequest (bypasses CORS)
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: CHRISTMAS_EVENT_CONFIG_URL,
+          onload: function (response) {
+            try {
+              if (response.status !== 200) {
+                warn("Christmas Event config fetch failed (status: " + response.status + "), defaulting to enabled");
+                resolve(true);
+                return;
+              }
+
+              const text = (response.responseText || "").trim().toLowerCase();
+              const enabled = text === "true" || text === "1" || text === "on" || text === "enabled";
+
+              // Cache the result
+              localStorage.setItem("ecPlus.christmasEventEnabled", String(enabled));
+              localStorage.setItem("ecPlus.christmasEventCacheTime", String(now));
+
+              log("Christmas Event config from server: " + enabled);
+              resolve(enabled);
+            } catch (e) {
+              warn("Christmas Event config parse error: " + e + ", defaulting to enabled");
+              resolve(true);
+            }
+          },
+          onerror: function (error) {
+            warn("Christmas Event config fetch error: " + error + ", defaulting to enabled");
+            resolve(true);
+          },
+          ontimeout: function () {
+            warn("Christmas Event config fetch timeout, defaulting to enabled");
+            resolve(true);
+          },
+          timeout: 5000,
+        });
+      } catch (e) {
+        warn("Christmas Event config error: " + e + ", defaulting to enabled");
+        resolve(true);
+      }
+    });
+  }
+
+  async function initChristmasEvent() {
     try {
+      // Check remote config before initializing
+      const enabled = await isChristmasEventEnabled();
+      if (!enabled) {
+        log("Christmas Event is disabled via remote config - skipping initialization");
+        return;
+      }
+
       log("Initializing Christmas Event...");
 
       // SVGs for gifts
@@ -2263,25 +2356,66 @@ const CEDRU_VERSION = true;
       // Track URL changes for SPA navigation
       let lastUrl = window.location.href;
 
+      // Check if all gifts have been injected
+      function areAllGiftsInjected() {
+        for (const def of LOCATIONS) {
+          if (!document.querySelector(`[data-gift-id="${def.uniqueId}"]`)) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      // Cleanup intervals and observer when all gifts are injected
+      function cleanupChristmasWatchers() {
+        log("All Christmas gifts injected - cleaning up watchers...");
+        if (christmasUrlCheckInterval) {
+          clearInterval(christmasUrlCheckInterval);
+          christmasUrlCheckInterval = null;
+        }
+        if (christmasFallbackInterval) {
+          clearInterval(christmasFallbackInterval);
+          christmasFallbackInterval = null;
+        }
+        if (christmasObserver) {
+          christmasObserver.disconnect();
+          christmasObserver = null;
+        }
+      }
+
+      // Check if current path matches any gift location
+      function isOnGiftPath() {
+        const currentPath = window.location.pathname;
+        return LOCATIONS.some((def) => def.path.test(currentPath));
+      }
+
+      // Wrapper that checks and cleans up if done
+      function checkAndInjectWithCleanup() {
+        checkAndInject();
+        if (areAllGiftsInjected()) {
+          cleanupChristmasWatchers();
+        }
+      }
+
       // Multiple retry attempts for async content loading
       function retryInjection() {
         [100, 300, 500, 1000, 2000].forEach((delay) => {
-          setTimeout(checkAndInject, delay);
+          setTimeout(checkAndInjectWithCleanup, delay);
         });
       }
 
       // Poll for URL changes (more reliable than history override in userscripts)
-      setInterval(() => {
+      christmasUrlCheckInterval = setInterval(() => {
         if (window.location.href !== lastUrl) {
           lastUrl = window.location.href;
           log("URL changed, retrying injection...");
           retryInjection();
         }
-      }, 200);
+      }, 500);
 
       // Also run periodically as fallback
-      setInterval(checkAndInject, 1000);
-      checkAndInject(); // Initial run
+      christmasFallbackInterval = setInterval(checkAndInjectWithCleanup, 1000);
+      checkAndInjectWithCleanup(); // Initial run
 
       // Listen for popstate (back/forward navigation)
       window.addEventListener("popstate", () => {
@@ -2289,9 +2423,13 @@ const CEDRU_VERSION = true;
       });
 
       // Add MutationObserver for immediate SPA updates (debounced)
+      // Only triggers checkAndInject when on a relevant gift path
       try {
         let debounceTimer = null;
-        const observer = new MutationObserver((mutations) => {
+        christmasObserver = new MutationObserver((mutations) => {
+          // Skip if not on a gift-relevant path
+          if (!isOnGiftPath()) return;
+
           let shouldCheck = false;
           for (const m of mutations) {
             if (m.addedNodes.length > 0) {
@@ -2301,12 +2439,12 @@ const CEDRU_VERSION = true;
           }
           if (shouldCheck) {
             clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(checkAndInject, 50);
+            debounceTimer = setTimeout(checkAndInjectWithCleanup, 50);
           }
         });
 
         if (document.body) {
-          observer.observe(document.body, { childList: true, subtree: true });
+          christmasObserver.observe(document.body, { childList: true, subtree: true });
         }
       } catch (e) {
         warn("MutationObserver Error: " + e);

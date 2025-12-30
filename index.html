@@ -530,40 +530,103 @@
           </details>
         </div>
 
-        <!-- Placeholder Script (Wkrótce) -->
+        <!-- Export Player Companies to CSV -->
         <div class="script-card p-6">
           <div class="text-center mb-4">
-            <div class="w-16 h-16 bg-slate-500 rounded-full flex items-center justify-center mx-auto mb-3">
-              <span class="text-2xl">🧪</span>
+            <div class="w-16 h-16 bg-rose-500 rounded-full flex items-center justify-center mx-auto mb-3">
+              <span class="text-2xl">🏢</span>
             </div>
-            <h3 class="text-xl font-bold text-gray-800 mb-2">Wkrótce</h3>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Export Player Companies</h3>
             <span class="inline-block bg-slate-100 text-slate-800 text-xs px-2 py-1 rounded-full font-medium">
-              v0.0.0
+              v1.1
             </span>
           </div>
-          <p class="text-gray-600 mb-4 text-sm leading-relaxed">Nowy skrypt w przygotowaniu.</p>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">
+            Automatycznie pobiera ranking ekonomiczny (globalny lub Polska) i eksportuje firmy wszystkich graczy do
+            pliku CSV. Panel UI pojawia się na stronie statystyk obywateli. Idealny, jeżeli monitorujesz firmy
+            społeczności albo przygotowujesz raporty.
+          </p>
+          <a
+            href="https://24na7.info/eclesiar-scripts/companies.user.js"
+            class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
+          >
+            📥 Pobierz skrypt
+          </a>
           <div class="chip-row">
-            <span class="chip"><span class="ico">🛠️</span>Gomez jeszcze nie zatwierdził</span>
-            <span class="chip"><span class="ico">⛏️</span>Lee: tempo, chłopcy!</span>
+            <span class="chip"><span class="ico">📈</span>CSV-ready w 1 klik</span>
+            <span class="chip"><span class="ico">🏁</span>Obsługa Global/PL</span>
           </div>
+          <details class="changelog">
+            <summary>
+              <span class="disclosure-chevron">▶</span>
+              <span class="label-closed">Pokaż changelog</span>
+              <span class="label-open">Ukryj changelog</span>
+            </summary>
+            <div class="mt-2 text-sm text-white/90">
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.1</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> wybór rankingu (global vs Polska) bez edycji kodu</li>
+                  <li><span class="ico">+</span> odświeżony panel statusu z selektorem</li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.0</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> pierwsze wydanie - eksport firm graczy do CSV</li>
+                </ul>
+              </ul>
+            </div>
+          </details>
         </div>
 
-        <!-- Placeholder Script (Wkrótce) -->
+        <!-- Export Holdings to CSV -->
         <div class="script-card p-6">
           <div class="text-center mb-4">
-            <div class="w-16 h-16 bg-teal-500 rounded-full flex items-center justify-center mx-auto mb-3">
-              <span class="text-2xl">🧱</span>
+            <div class="w-16 h-16 bg-emerald-500 rounded-full flex items-center justify-center mx-auto mb-3">
+              <span class="text-2xl">🏰</span>
             </div>
-            <h3 class="text-xl font-bold text-gray-800 mb-2">Wkrótce</h3>
-            <span class="inline-block bg-teal-100 text-teal-800 text-xs px-2 py-1 rounded-full font-medium">
-              v0.0.0
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Export Holdings</h3>
+            <span class="inline-block bg-emerald-100 text-emerald-800 text-xs px-2 py-1 rounded-full font-medium">
+              v1.2.2
             </span>
           </div>
-          <p class="text-gray-600 mb-4 text-sm leading-relaxed">Nowy skrypt w przygotowaniu.</p>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">
+            Zaciąga pełną listę holdingów (1-769) wraz z ich firmami i zapisuje dane w CSV. UI pojawia się na każdej
+            stronie holdingu np: <code>https://eclesiar.com/holding/323</code>. Otrzymujesz szybki wgląd w firmy i ich
+            lokalizacje.
+          </p>
+          <a
+            href="https://24na7.info/eclesiar-scripts/holdings.user.js"
+            class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
+          >
+            📥 Pobierz skrypt
+          </a>
           <div class="chip-row">
-            <span class="chip"><span class="ico">🧙</span>Xardas: wszystko w swoim czasie</span>
-            <span class="chip"><span class="ico">🐺</span>Gorn: biorę to w ciemno</span>
+            <span class="chip"><span class="ico">📜</span>1-769 holdingów w CSV</span>
+            <span class="chip"><span class="ico">🛰️</span>Pełne drzewo firm</span>
           </div>
+          <details class="changelog">
+            <summary>
+              <span class="disclosure-chevron">▶</span>
+              <span class="label-closed">Pokaż changelog</span>
+              <span class="label-open">Ukryj changelog</span>
+            </summary>
+            <div class="mt-2 text-sm text-white/90">
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.2.2</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> dodano linki autoaktualizacji i poprawki logowania</li>
+                </ul>
+              </ul>
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.2.0</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> wsparcie dla wszystkich regionów i firm w holdingu</li>
+                </ul>
+              </ul>
+            </div>
+          </details>
         </div>
       </div>
 
