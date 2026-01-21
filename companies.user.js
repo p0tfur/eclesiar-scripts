@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Eclesiar - Export Player Companies to CSV
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.1.1
 // @description  Pobiera wszystkich graczy z rankingu ekonomicznego i ich firmy, eksportuje do CSV
 // @author       p0tfur
 // @match        https://eclesiar.com/statistics/*
+// @match        https://apollo.eclesiar.com/statistics/*
 // @updateURL    https://24na7.info/eclesiar-scripts/companies.user.js
 // @downloadURL  https://24na7.info/eclesiar-scripts/companies.user.js
 // @grant        none
@@ -20,7 +21,7 @@
     // Opóźnienie między requestami (ms) - żeby nie przeciążyć serwera
     REQUEST_DELAY: 1000,
     // Bazowy URL
-    BASE_URL: "https://eclesiar.com",
+    BASE_URL: location.origin,
     // Maksymalna liczba stron do pobrania (0 = wszystkie)
     MAX_PAGES: 0,
     // Zakres rankingu: 18 = Polska, 0 = Global

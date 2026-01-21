@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Eclesiar Market - Show Seller/holding Country Flag
 // @namespace    https://eclesiar.com/
-// @version      1.3.7
+// @version      1.3.8
 // @description  Show nationality flag next to seller name on /market (users and holdings via CEO), for auctions added indicators for average prices
 // @author       p0tfur
 // @match        https://eclesiar.com/market*
 // @match        https://eclesiar.com/militaryunit/*
+// @match        https://apollo.eclesiar.com/market*
+// @match        https://apollo.eclesiar.com/militaryunit/*
 // @updateURL    https://24na7.info/eclesiar-scripts/Eclesiar Market & Auctions.user.js
 // @downloadURL  https://24na7.info/eclesiar-scripts/Eclesiar Market & Auctions.user.js
 // @run-at       document-end

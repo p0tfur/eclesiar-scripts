@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name Eclesiar Training Center Plus
 // @namespace http://tampermonkey.net/
-// @version 1.2.2
+// @version 1.2.3
 // @description Settings panel, alternative table view, fixed mining eq stats for PL, performance optimizations, tabel view stats refresh bug fixed, perf colors better contrast
 // @author p0tfur, based on script by ms05 + SirManiek
 // @match https://eclesiar.com/training
 // @match https://eclesiar.com/market/auction*
+// @match https://apollo.eclesiar.com/training
+// @match https://apollo.eclesiar.com/market/auction*
 // @updateURL    https://24na7.info/eclesiar-scripts/Eclesiar Training Center.user.js
 // @downloadURL  https://24na7.info/eclesiar-scripts/Eclesiar Training Center.user.js
 // @grant GM_addStyle

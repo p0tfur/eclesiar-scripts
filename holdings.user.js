@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Eclesiar - Export Holdings to CSV
 // @namespace    http://tampermonkey.net/
-// @version      1.2.2
+// @version      1.2.3
 // @description  Pobiera dane holdingów (1-769) i ich firmy, zapisuje do CSV
 // @author       p0tfur
 // @match        https://eclesiar.com/holding/*
+// @match        https://apollo.eclesiar.com/holding/*
 // @updateURL    https://24na7.info/eclesiar-scripts/holdings.user.js
 // @downloadURL  https://24na7.info/eclesiar-scripts/holdings.user.js
 // @grant        none
@@ -14,12 +15,12 @@
   "use strict";
 
   const CONFIG = {
-    BASE_URL: "https://eclesiar.com/holding",
+    BASE_URL: `${location.origin}/holding`,
     START_ID: 1,
     END_ID: 769,
     REQUEST_DELAY: 1000,
   };
-  const BASE_SITE = CONFIG.BASE_URL.replace(/\/holding.*$/, "");
+  const BASE_SITE = location.origin;
 
   const TEXT_NODES_SELECTOR = "div,span,p,li,td,th,strong,b";
 

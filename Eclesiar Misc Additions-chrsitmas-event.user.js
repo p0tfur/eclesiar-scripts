@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name Eclesiar Misc Additions
 // @namespace http://tampermonkey.net/
-// @version 1.4.5
+// @version 1.4.6
 // @description Fixed mission indicator, improved UX for energy and food indicators, added auto language detection and Polish translation, added EQ presets to build/mine views
 // @author p0tfur, based on script by ms05 + SirManiek
 // @match https://eclesiar.com/*
-// @match https://apollo.eclesiar.com/*
 // @updateURL    https://24na7.info/eclesiar-scripts/Eclesiar Misc Additions.user.js
 // @downloadURL  https://24na7.info/eclesiar-scripts/Eclesiar Misc Additions.user.js
-// @grant none
+// @grant GM_xmlhttpRequest
+// @connect 24na7.info
 // ==/UserScript==
 
 ////////// USER CONFIG //////////
@@ -1010,7 +1010,7 @@ const CEDRU_VERSION = true;
 
     const myTransactionsMenuItem = document.createElement("a");
     myTransactionsMenuItem.className = "dropdown-item";
-    myTransactionsMenuItem.href = `${location.origin}/user/transactions`;
+    myTransactionsMenuItem.href = "https://eclesiar.com/user/transactions";
     myTransactionsMenuItem.textContent = TRANSLATIONS[LANGUAGE]?.myTransactions || "My transactions";
 
     if (contractsMenuItem.nextSibling) {
@@ -2027,6 +2027,434 @@ const CEDRU_VERSION = true;
     });
   }
 
+  ////////// CHRISTMAS EVENT //////////
+  // Remote config URL for enabling/disabling the event
+  const CHRISTMAS_EVENT_CONFIG_URL = "https://24na7.info/eclesiar-scripts/christmas-event-config.txt";
+  // Cache duration in milliseconds (1 hour) to avoid repeated fetches
+  const CHRISTMAS_CONFIG_CACHE_MS = 60 * 60 * 1000;
+
+  // Track interval/observer IDs for cleanup when all gifts are injected
+  let christmasUrlCheckInterval = null;
+  let christmasFallbackInterval = null;
+  let christmasObserver = null;
+
+  // Check remote config to see if Christmas event is enabled
+  // Uses GM_xmlhttpRequest to bypass CORS restrictions
+  function isChristmasEventEnabled() {
+    return new Promise((resolve) => {
+      try {
+        // Check localStorage cache first
+        const cached = localStorage.getItem("ecPlus.christmasEventEnabled");
+        const cachedTime = localStorage.getItem("ecPlus.christmasEventCacheTime");
+        const now = Date.now();
+
+        // Use cache if valid and not expired
+        if (cached !== null && cachedTime && now - parseInt(cachedTime, 10) < CHRISTMAS_CONFIG_CACHE_MS) {
+          log("Christmas Event config from cache: " + cached);
+          resolve(cached === "true");
+          return;
+        }
+
+        // Check if GM_xmlhttpRequest is available (Tampermonkey/Greasemonkey)
+        if (typeof GM_xmlhttpRequest === "undefined") {
+          warn("GM_xmlhttpRequest not available, defaulting to enabled");
+          resolve(true);
+          return;
+        }
+
+        // Fetch remote config using GM_xmlhttpRequest (bypasses CORS)
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: CHRISTMAS_EVENT_CONFIG_URL,
+          onload: function (response) {
+            try {
+              if (response.status !== 200) {
+                warn("Christmas Event config fetch failed (status: " + response.status + "), defaulting to enabled");
+                resolve(true);
+                return;
+              }
+
+              const text = (response.responseText || "").trim().toLowerCase();
+              const enabled = text === "true" || text === "1" || text === "on" || text === "enabled";
+
+              // Cache the result
+              localStorage.setItem("ecPlus.christmasEventEnabled", String(enabled));
+              localStorage.setItem("ecPlus.christmasEventCacheTime", String(now));
+
+              log("Christmas Event config from server: " + enabled);
+              resolve(enabled);
+            } catch (e) {
+              warn("Christmas Event config parse error: " + e + ", defaulting to enabled");
+              resolve(true);
+            }
+          },
+          onerror: function (error) {
+            warn("Christmas Event config fetch error: " + error + ", defaulting to enabled");
+            resolve(true);
+          },
+          ontimeout: function () {
+            warn("Christmas Event config fetch timeout, defaulting to enabled");
+            resolve(true);
+          },
+          timeout: 5000,
+        });
+      } catch (e) {
+        warn("Christmas Event config error: " + e + ", defaulting to enabled");
+        resolve(true);
+      }
+    });
+  }
+
+  async function initChristmasEvent() {
+    try {
+      // Check remote config before initializing
+      const enabled = await isChristmasEventEnabled();
+      if (!enabled) {
+        log("Christmas Event is disabled via remote config - skipping initialization");
+        return;
+      }
+
+      log("Initializing Christmas Event...");
+
+      // SVGs for gifts
+      const GIFT_SVGS = {
+        pink: `<svg viewBox="0 0 512 512" width="24" height="24" style="filter: drop-shadow(0 0 5px #ff69b4); cursor: pointer; transition: transform 0.2s;">
+          <path fill="#ff69b4" d="M40 120h432v80H40z"></path>
+          <path fill="#d63384" d="M64 200h384v272H64z"></path>
+          <path fill="#ffeb3b" d="M232 200h48v272h-48z"></path>
+          <path fill="#ffeb3b" d="M232 120h48v80h-48z"></path>
+          <path fill="#ffeb3b" d="M200 40h112v80H200z"></path>
+          <path fill="#ff69b4" d="M120 40h272v20H120z"></path>
+          <circle cx="256" cy="80" r="30" fill="#ffeb3b"></circle>
+        </svg>`,
+        blue: `<svg viewBox="0 0 512 512" width="24" height="24" style="filter: drop-shadow(0 0 5px #00bfff); cursor: pointer; transition: transform 0.2s;">
+          <path fill="#00bfff" d="M40 120h432v80H40z"></path>
+          <path fill="#0091ea" d="M64 200h384v272H64z"></path>
+          <path fill="#e0f7fa" d="M232 200h48v272h-48z"></path>
+          <path fill="#e0f7fa" d="M232 120h48v80h-48z"></path>
+          <path fill="#e0f7fa" d="M200 40h112v80H200z"></path>
+          <path fill="#00bfff" d="M120 40h272v20H120z"></path>
+          <circle cx="256" cy="80" r="30" fill="#e0f7fa"></circle>
+        </svg>`,
+        green: `<svg viewBox="0 0 512 512" width="24" height="24" style="filter: drop-shadow(0 0 5px #32cd32); cursor: pointer; transition: transform 0.2s;">
+          <path fill="#32cd32" d="M40 120h432v80H40z"></path>
+          <path fill="#228b22" d="M64 200h384v272H64z"></path>
+          <path fill="#ff0000" d="M232 200h48v272h-48z"></path>
+          <path fill="#ff0000" d="M232 120h48v80h-48z"></path>
+          <path fill="#ff0000" d="M200 40h112v80H200z"></path>
+          <path fill="#32cd32" d="M120 40h272v20H120z"></path>
+          <circle cx="256" cy="80" r="30" fill="#ff0000"></circle>
+        </svg>`,
+      };
+
+      const PAGES = {
+        passionce: "https://24na7.info/christmas-pages/passionce.html",
+        p0tfur: "https://24na7.info/christmas-pages/p0tfur.html",
+        reinspire: "https://24na7.info/christmas-pages/reinspire.html",
+      };
+
+      const LOCATIONS = [
+        // 1. Battlepass (Passionce)
+        {
+          path: /^\/battlepass/i,
+          selector: ".battle-pass__tier--item.active",
+          color: "pink",
+          url: PAGES.passionce,
+          uniqueId: "gift-bp-1",
+          mode: "append",
+        },
+        // 2. API (Passionce)
+        {
+          path: /^\/api/i,
+          selector: "h3.mb-0",
+          color: "pink",
+          url: PAGES.passionce,
+          uniqueId: "gift-api-2",
+          mode: "append",
+        },
+        // 3. Statistics (Passionce)
+        {
+          path: /^\/statistics\/citizen\/0\/damage/i,
+          selector: ".filter-area",
+          color: "pink",
+          url: PAGES.passionce,
+          uniqueId: "gift-stats-3",
+          mode: "append",
+        },
+        // 4. Market Jobs (p0tfur)
+        {
+          path: /^\/market\/jobs\/offers/i,
+          selector: ".pagination",
+          color: "blue",
+          url: PAGES.p0tfur,
+          uniqueId: "gift-jobs-4",
+          mode: "before",
+        },
+        // 5. Battles Finished (p0tfur)
+        {
+          path: /^\/battles\/finished/i,
+          selector: "h1",
+          filter: (el) => {
+            const t = (el.textContent || "").toLowerCase();
+            return t.includes("zakończone bitwy") || t.includes("finished battles");
+          },
+          color: "blue",
+          url: PAGES.p0tfur,
+          uniqueId: "gift-battles-5",
+          mode: "append",
+        },
+        // 6. University (p0tfur)
+        {
+          path: /^\/university/i,
+          selector: ".business-header .flex-grow-1",
+          color: "blue",
+          url: PAGES.p0tfur,
+          uniqueId: "gift-uni-6",
+          mode: "append",
+        },
+        // 7. Contracts (ReInspire)
+        {
+          path: /^\/contracts/i,
+          selector: ".content-header h1",
+          filter: (el) => {
+            const t = (el.textContent || "").toLowerCase();
+            return t.includes("lista kontraktów") || t.includes("contract list");
+          },
+          color: "green",
+          url: PAGES.reinspire,
+          uniqueId: "gift-contracts-7",
+          mode: "append",
+        },
+        // 8. Market Gold (ReInspire) - REPLACE ITEM
+        {
+          path: /^\/market\/gold/i,
+          selector: "img[src*='12359.png']",
+          color: "green",
+          url: PAGES.reinspire,
+          uniqueId: "gift-gold-8",
+          mode: "replace",
+        },
+        // 9. Referals (ReInspire)
+        {
+          path: /^\/referals/i,
+          selector: "p",
+          filter: (el) => {
+            const txt = el.textContent || "";
+            return txt.includes("Ekwipunek T1") || txt.includes("Equipment T1");
+          },
+          color: "green",
+          url: PAGES.reinspire,
+          uniqueId: "gift-ref-9",
+          mode: "before",
+        },
+        // 10. Market Auction (Passionce)
+        {
+          path: /^\/market\/auction/i,
+          selector: ".fa-star",
+          color: "pink",
+          url: PAGES.passionce,
+          uniqueId: "gift-auction-10",
+          mode: "after",
+        },
+        // 11. Tournament List (Passionce)
+        {
+          path: /^\/tournament\/list/i,
+          selector: ".title-area h3",
+          color: "pink",
+          url: PAGES.passionce,
+          uniqueId: "gift-tournament-11",
+          mode: "append",
+        },
+        // 12. Dashboard Construction (Passionce)
+        {
+          path: /^\/dashboard/i,
+          selector: ".title-text.bold.font-17",
+          filter: (el) => {
+            const t = (el.textContent || "").toLowerCase();
+            return t.includes("kolejka budowy") || t.includes("construction queue");
+          },
+          color: "pink",
+          url: PAGES.passionce,
+          uniqueId: "gift-dashboard-12",
+          mode: "append",
+        },
+      ];
+
+      function createGiftElement(def) {
+        const wrapper = document.createElement("a");
+        wrapper.href = def.url;
+        wrapper.target = "_blank";
+        wrapper.className = "ec-christmas-gift";
+        wrapper.innerHTML = GIFT_SVGS[def.color];
+        wrapper.style.display = "inline-flex";
+        wrapper.style.verticalAlign = "middle";
+        wrapper.style.margin = "0 10px";
+        wrapper.style.textDecoration = "none";
+        wrapper.style.position = "relative";
+        wrapper.style.zIndex = "999";
+        wrapper.title = "Kliknij mnie - jestem świąteczną niespodzianką!";
+        wrapper.setAttribute("data-gift-id", def.uniqueId);
+
+        // Add hover animation
+        wrapper.onmouseover = () => {
+          wrapper.querySelector("svg").style.transform = "scale(1.2) rotate(10deg)";
+        };
+        wrapper.onmouseout = () => {
+          wrapper.querySelector("svg").style.transform = "scale(1) rotate(0deg)";
+        };
+
+        return wrapper;
+      }
+
+      function checkAndInject() {
+        const currentPath = window.location.pathname;
+
+        LOCATIONS.forEach((def) => {
+          if (!def.path.test(currentPath)) return;
+          if (document.querySelector(`[data-gift-id="${def.uniqueId}"]`)) return; // Already injected
+
+          let target = null;
+          if (def.filter) {
+            // Find by selector then filter
+            const candidates = document.querySelectorAll(def.selector);
+            log(`[${def.uniqueId}] Found ${candidates.length} candidates for selector: ${def.selector}`);
+            target = Array.from(candidates).find(def.filter);
+          } else {
+            target = document.querySelector(def.selector);
+            log(`[${def.uniqueId}] Selector "${def.selector}" found: ${target ? "YES" : "NO"}`);
+          }
+
+          if (!target) {
+            log(`[${def.uniqueId}] Target not found, skipping...`);
+            return;
+          }
+
+          log(`Injecting Christmas gift: ${def.uniqueId}`);
+
+          const gift = createGiftElement(def);
+
+          if (def.mode === "replace") {
+            // Specifically for the gold market item
+            target.style.display = "none";
+            // Insert gift where image was
+            target.parentNode.insertBefore(gift, target);
+          } else if (def.mode === "append_parent") {
+            target.parentNode.appendChild(gift);
+          } else if (def.mode === "prepend") {
+            target.insertBefore(gift, target.firstChild);
+          } else if (def.mode === "before") {
+            target.parentNode.insertBefore(gift, target);
+          } else if (def.mode === "after") {
+            target.parentNode.insertBefore(gift, target.nextSibling);
+          } else {
+            // Default append
+            target.appendChild(gift);
+          }
+        });
+      }
+
+      // Track URL changes for SPA navigation
+      let lastUrl = window.location.href;
+
+      // Check if all gifts have been injected
+      function areAllGiftsInjected() {
+        for (const def of LOCATIONS) {
+          if (!document.querySelector(`[data-gift-id="${def.uniqueId}"]`)) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      // Cleanup intervals and observer when all gifts are injected
+      function cleanupChristmasWatchers() {
+        log("All Christmas gifts injected - cleaning up watchers...");
+        if (christmasUrlCheckInterval) {
+          clearInterval(christmasUrlCheckInterval);
+          christmasUrlCheckInterval = null;
+        }
+        if (christmasFallbackInterval) {
+          clearInterval(christmasFallbackInterval);
+          christmasFallbackInterval = null;
+        }
+        if (christmasObserver) {
+          christmasObserver.disconnect();
+          christmasObserver = null;
+        }
+      }
+
+      // Check if current path matches any gift location
+      function isOnGiftPath() {
+        const currentPath = window.location.pathname;
+        return LOCATIONS.some((def) => def.path.test(currentPath));
+      }
+
+      // Wrapper that checks and cleans up if done
+      function checkAndInjectWithCleanup() {
+        checkAndInject();
+        if (areAllGiftsInjected()) {
+          cleanupChristmasWatchers();
+        }
+      }
+
+      // Multiple retry attempts for async content loading
+      function retryInjection() {
+        [100, 300, 500, 1000, 2000].forEach((delay) => {
+          setTimeout(checkAndInjectWithCleanup, delay);
+        });
+      }
+
+      // Poll for URL changes (more reliable than history override in userscripts)
+      christmasUrlCheckInterval = setInterval(() => {
+        if (window.location.href !== lastUrl) {
+          lastUrl = window.location.href;
+          log("URL changed, retrying injection...");
+          retryInjection();
+        }
+      }, 500);
+
+      // Also run periodically as fallback
+      christmasFallbackInterval = setInterval(checkAndInjectWithCleanup, 1000);
+      checkAndInjectWithCleanup(); // Initial run
+
+      // Listen for popstate (back/forward navigation)
+      window.addEventListener("popstate", () => {
+        retryInjection();
+      });
+
+      // Add MutationObserver for immediate SPA updates (debounced)
+      // Only triggers checkAndInject when on a relevant gift path
+      try {
+        let debounceTimer = null;
+        christmasObserver = new MutationObserver((mutations) => {
+          // Skip if not on a gift-relevant path
+          if (!isOnGiftPath()) return;
+
+          let shouldCheck = false;
+          for (const m of mutations) {
+            if (m.addedNodes.length > 0) {
+              shouldCheck = true;
+              break;
+            }
+          }
+          if (shouldCheck) {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(checkAndInjectWithCleanup, 50);
+          }
+        });
+
+        if (document.body) {
+          christmasObserver.observe(document.body, { childList: true, subtree: true });
+        }
+      } catch (e) {
+        warn("MutationObserver Error: " + e);
+      }
+    } catch (e) {
+      warn("Christmas Event Error: " + e);
+    }
+  }
+  /////////////////////////////////////
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       // Auto-detect language on first run and observe SPA changes
@@ -2068,6 +2496,10 @@ const CEDRU_VERSION = true;
       }
 
       adjustTopSideUserHeight();
+
+      ////////// CHRISTMAS EVENT //////////
+      initChristmasEvent();
+      /////////////////////////////////////
     });
   } else {
     // Auto-detect language on first run and observe SPA changes
@@ -2109,5 +2541,9 @@ const CEDRU_VERSION = true;
     }
 
     adjustTopSideUserHeight();
+
+    ////////// CHRISTMAS EVENT //////////
+    initChristmasEvent();
+    /////////////////////////////////////
   }
 })();
