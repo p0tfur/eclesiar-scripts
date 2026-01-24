@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Janueszex Assistant by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.3.8
+// @version      1.4.0
 // @description  Janueszex Assistant
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -15,13 +15,23 @@
   const EJA_ADD_HOLDINGS_TO_MENU = true; // Add holdings to global dropdown menu
   // USER CONFIG
 
+  const SETTINGS_KEY = "eja_settings_v1";
+  const DEFAULT_EJA_SETTINGS = {
+    addHoldingsToMenu: EJA_ADD_HOLDINGS_TO_MENU,
+    jobsEnhancements: true,
+    dashboardEnabled: true,
+    sellPageHelpers: true,
+    hideMarketSaleNotifications: false,
+    generateDailySalesSummaries: true,
+  };
+
+  let ejaSettings = null;
+
   const CACHE_KEY = "eja_holdings";
   const CACHE_TTL_MS = 48 * 60 * 60 * 1000; // 48h
   const HOLDINGS_JOBS_CACHE_TTL_MS = 48 * 60 * 60 * 1000; // 48h
-  const SUMMARY_COLLAPSE_KEY = "eja_holdings_summary_collapsed";
   let holdingsCacheWarned = false;
   let holdingsJobsCache = { updatedAt: 0, holdings: [], inFlight: null };
-  let lastSectionStatsHash = null; // Cache hash to skip redundant renders
 
   // Business Dashboard Configuration
   const DASHBOARD_DB_NAME = "eja_business_dashboard";
@@ -30,11 +40,539 @@
   let dashboardDB = null;
   let dashboardOverlayOpen = false;
 
+  // Sales Summary Configuration
+  const SALES_DB_NAME = "eja_sales_summary";
+  const SALES_DB_VERSION = 1;
+  const SALES_STORE_NAME = "daily_sales";
+  const SALES_HISTORY_DAYS = 7;
+  const SALES_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+  const SALES_CACHE_VERSION = "v2";
+  let salesDB = null;
+  let salesOverlayOpen = false;
+
   const onReady = (fn) => {
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", fn, { once: true });
     } else {
       fn();
+    }
+  };
+
+  const SALES_FILTER_USER = 2;
+  const SALES_FILTER_HOLDING = 6;
+
+  const getSalesSummaryDateKeys = () =>
+    Array.from({ length: SALES_HISTORY_DAYS }, (_, index) => getDateKeyDaysAgo(index));
+
+  const formatSalesDateLabel = (dateKey) => {
+    if (dateKey === getTodayDateKey()) return "Dzisiaj";
+    if (dateKey === getDateKeyDaysAgo(1)) return "Wczoraj";
+    return dateKey.split("-").reverse().join(".");
+  };
+
+  const parseTransactionDateKey = (rawText) => {
+    if (!rawText) return null;
+    const text = String(rawText).trim().toLowerCase();
+    if (!text) return null;
+    if (text.includes("wczoraj")) return getDateKeyDaysAgo(1);
+    if (text.includes("dzisiaj") || text.includes("dziś")) return getTodayDateKey();
+    if (text.includes("godzin") || text.includes("minut") || text.includes("sekund")) return getTodayDateKey();
+    const match = text.match(/(\d{2})[./-](\d{2})[./-](\d{4})/);
+    if (match) return `${match[3]}-${match[2]}-${match[1]}`;
+    return null;
+  };
+
+  const parseTransactionValue = (rawText) => {
+    const text = String(rawText || "");
+    const amount = parseNumberValue(text);
+    const currencyMatch = text.match(/[A-Z]{2,6}/);
+    const currency = currencyMatch ? currencyMatch[0] : "";
+    return { amount, currency };
+  };
+
+  const openSalesDB = () => {
+    return new Promise((resolve, reject) => {
+      if (salesDB) return resolve(salesDB);
+      try {
+        const request = indexedDB.open(SALES_DB_NAME, SALES_DB_VERSION);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          salesDB = request.result;
+          resolve(salesDB);
+        };
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains(SALES_STORE_NAME)) {
+            db.createObjectStore(SALES_STORE_NAME, { keyPath: "key" });
+          }
+        };
+      } catch (e) {
+        reject(e);
+      }
+    });
+  };
+
+  const getSalesSummaryCache = async (key) => {
+    try {
+      const db = await openSalesDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(SALES_STORE_NAME, "readonly");
+        const store = tx.objectStore(SALES_STORE_NAME);
+        const request = store.get(key);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+      });
+    } catch (e) {
+      console.warn("[EJA Sales] Failed to read cache:", e);
+      return null;
+    }
+  };
+
+  const saveSalesSummaryCache = async (payload) => {
+    try {
+      const db = await openSalesDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(SALES_STORE_NAME, "readwrite");
+        const store = tx.objectStore(SALES_STORE_NAME);
+        const request = store.put(payload);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    } catch (e) {
+      console.warn("[EJA Sales] Failed to write cache:", e);
+    }
+  };
+
+  const isMarketSaleNotification = (node) => {
+    if (!node || !(node instanceof HTMLElement)) return false;
+    if (!node.classList.contains("notification-popup")) return false;
+    const title = node.querySelector("h3")?.textContent || "";
+    return /Przedmioty sprzedane na rynku/i.test(title);
+  };
+
+  const closeMarketSaleNotification = (node) => {
+    if (!isMarketSaleNotification(node)) return false;
+    const closeBtn = node.querySelector(".close-notification");
+    if (closeBtn) {
+      closeBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+    node.remove();
+    return true;
+  };
+
+  const removeMarketSaleNotifications = (root = document) => {
+    const nodes = Array.from(root.querySelectorAll(".notification-popup"));
+    nodes.forEach((node) => {
+      closeMarketSaleNotification(node);
+    });
+  };
+
+  const initMarketSaleNotificationFilter = () => {
+    if (!isSettingEnabled("hideMarketSaleNotifications")) return;
+    removeMarketSaleNotifications(document);
+    if (document.__ejaMarketSaleObserver) return;
+    const observer = new MutationObserver((mutations) => {
+      if (!isSettingEnabled("hideMarketSaleNotifications")) return;
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (!node || !(node instanceof HTMLElement)) return;
+          if (closeMarketSaleNotification(node)) return;
+          const popup = node.querySelector && node.querySelector(".notification-popup");
+          if (popup) closeMarketSaleNotification(popup);
+        });
+      });
+    });
+    const target = document.querySelector(".notifications-list") || document.body || document.documentElement;
+    observer.observe(target, { childList: true, subtree: true });
+    document.__ejaMarketSaleObserver = observer;
+  };
+
+  const resolveUserIdentityFromDocument = (doc) => {
+    const root = doc || document;
+    const backButton = root.querySelector('a.back-button[href^="/user/"]');
+    const navLink =
+      backButton ||
+      root.querySelector(
+        '.user-panel a[href^="/user/"], .navbar a[href^="/user/"], nav a[href^="/user/"], .dropdown-menu a[href^="/user/"]',
+      );
+    if (!navLink) return { id: null, name: "Gracz" };
+    const href = navLink.getAttribute("href") || "";
+    const idMatch = href.match(/\/user\/(\d+)/);
+    const img = navLink.querySelector("img");
+    const name = (img && img.getAttribute("alt")) || navLink.textContent.trim() || "Gracz";
+    return { id: idMatch ? idMatch[1] : null, name };
+  };
+
+  const buildSalesCacheKey = (entity, dateKey) => `sales:${SALES_CACHE_VERSION}:${entity.type}:${entity.id}:${dateKey}`;
+
+  const buildTransactionsUrlCandidates = (entity, page) => {
+    const pageNum = page || 1;
+    if (entity.type === "holding") {
+      const base = `/holding/${entity.id}/transactions/${SALES_FILTER_HOLDING}`;
+      if (pageNum > 1) return [`${base}/${pageNum}`];
+      return [base];
+    }
+    const base = `/user/transactions/${SALES_FILTER_USER}`;
+    if (pageNum > 1) return [`${base}/${pageNum}`];
+    return [base];
+  };
+
+  const fetchTransactionsDocument = async (entity, page) => {
+    const candidates = buildTransactionsUrlCandidates(entity, page);
+    for (const url of candidates) {
+      try {
+        const response = await fetch(url, { credentials: "include" });
+        if (!response.ok) continue;
+        const html = await response.text();
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const tableBody = doc.querySelector("table.table tbody");
+        if (tableBody) return doc;
+      } catch (e) {
+        console.warn("[EJA Sales] Failed to fetch transactions:", e);
+      }
+    }
+    return null;
+  };
+
+  const isMarketSaleRow = (row) => {
+    const descCell = row.querySelector(".column-4") || row.querySelector("td:nth-child(5)");
+    const text = descCell ? descCell.textContent || "" : "";
+    return /Przedmioty kupione na rynku/i.test(text);
+  };
+
+  const normalizeEntityLabel = (value) => (value || "").trim().toLowerCase();
+
+  const doesCellMatchEntity = (cell, entity) => {
+    if (!cell) return false;
+    const link = cell.querySelector('a[href^="/user/"], a[href^="/holding/"]');
+    if (link) {
+      const href = link.getAttribute("href") || "";
+      if (entity.type === "user" && entity.id && href.includes(`/user/${entity.id}`)) return true;
+      if (entity.type === "holding" && entity.id && href.includes(`/holding/${entity.id}`)) return true;
+    }
+    const imgAlt = cell.querySelector("img")?.getAttribute("alt") || "";
+    const entityName = normalizeEntityLabel(entity.name);
+    if (imgAlt && entityName && normalizeEntityLabel(imgAlt) === entityName) return true;
+    return false;
+  };
+
+  const isRowSellerMatch = (row, entity) => {
+    // For market sales, we are always in column "Do" (column-2).
+    const recipientCell = row.querySelector(".column-2") || row.querySelector("td:nth-child(3)");
+    return doesCellMatchEntity(recipientCell, entity);
+  };
+
+  const collectSalesForEntity = async (entity, dateKeys) => {
+    const summary = {};
+    const dateKeySet = new Set(dateKeys);
+    dateKeys.forEach((key) => {
+      summary[key] = { totals: {}, count: 0 };
+    });
+    const oldestKey = dateKeys[dateKeys.length - 1];
+    let page = 1;
+    let keepFetching = true;
+
+    while (keepFetching && page <= 200) {
+      const doc = await fetchTransactionsDocument(entity, page);
+      if (!doc) break;
+      const rows = Array.from(doc.querySelectorAll("table.table tbody tr"));
+      if (!rows.length) break;
+      let reachedOld = false;
+      let inRangeRows = 0;
+      let marketRows = 0;
+      let sellerMatches = 0;
+      let countedRows = 0;
+      rows.forEach((row) => {
+        const dateCell = row.querySelector(".column-5") || row.querySelector("td:nth-child(6)");
+        const dateKey = parseTransactionDateKey(dateCell ? dateCell.textContent : "");
+        if (!dateKey) return;
+        if (!dateKeySet.has(dateKey)) {
+          if (oldestKey && dateKey < oldestKey) reachedOld = true;
+          return;
+        }
+        inRangeRows += 1;
+        if (!isMarketSaleRow(row)) return;
+        marketRows += 1;
+        if (!isRowSellerMatch(row, entity)) return;
+        sellerMatches += 1;
+        const valueCell = row.querySelector(".column-3") || row.querySelector("td:nth-child(4)");
+        const { amount, currency } = parseTransactionValue(valueCell ? valueCell.textContent : "");
+        if (!currency || amount === 0) return;
+        const bucket = summary[dateKey];
+        bucket.totals[currency] = (bucket.totals[currency] || 0) + amount;
+        bucket.count += 1;
+        countedRows += 1;
+      });
+      if (reachedOld) break;
+      page += 1;
+    }
+    return summary;
+  };
+
+  const getSalesSummaryForEntity = async (entity, dateKeys) => {
+    const now = Date.now();
+    const cacheEntries = await Promise.all(
+      dateKeys.map((dateKey) => getSalesSummaryCache(buildSalesCacheKey(entity, dateKey))),
+    );
+    const allFresh = cacheEntries.every((entry) => entry && now - entry.updatedAt < SALES_CACHE_TTL_MS);
+    if (allFresh) {
+      const days = {};
+      dateKeys.forEach((dateKey, index) => {
+        const entry = cacheEntries[index];
+        days[dateKey] = { totals: entry?.totals || {}, count: entry?.count || 0 };
+      });
+      return { entity, days };
+    }
+    const days = await collectSalesForEntity(entity, dateKeys);
+    await Promise.all(
+      dateKeys.map((dateKey) =>
+        saveSalesSummaryCache({
+          key: buildSalesCacheKey(entity, dateKey),
+          entityId: entity.id,
+          entityType: entity.type,
+          entityName: entity.name,
+          dateKey,
+          totals: days[dateKey].totals,
+          count: days[dateKey].count,
+          updatedAt: now,
+        }),
+      ),
+    );
+    return { entity, days };
+  };
+
+  const resolveUserEntity = async () => {
+    const initial = resolveUserIdentityFromDocument(document);
+    if (initial.id) return { type: "user", id: initial.id, name: initial.name };
+    const doc = await fetchTransactionsDocument({ type: "user" }, 1);
+    const resolved = resolveUserIdentityFromDocument(doc);
+    return { type: "user", id: resolved.id, name: resolved.name };
+  };
+
+  const getSalesSummaryEntities = async () => {
+    const entities = [];
+    const userEntity = await resolveUserEntity();
+    if (userEntity.id) entities.push(userEntity);
+    const holdings = await getHoldingsFromJobs();
+    holdings.forEach((holding) => {
+      if (holding.id) {
+        entities.push({ type: "holding", id: holding.id, name: holding.name || `Holding ${holding.id}` });
+      }
+    });
+    return entities;
+  };
+
+  const buildSalesSummaryData = async () => {
+    if (!isSettingEnabled("generateDailySalesSummaries")) return [];
+    const dateKeys = getSalesSummaryDateKeys();
+    const entities = await getSalesSummaryEntities();
+    const summaries = await Promise.all(entities.map((entity) => getSalesSummaryForEntity(entity, dateKeys)));
+    return summaries;
+  };
+
+  const ensureSalesSummaryStyles = () => {
+    if (document.getElementById("eja-sales-styles")) return;
+    const style = document.createElement("style");
+    style.id = "eja-sales-styles";
+    style.textContent = `
+      .eja-sales-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 9998;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+      .eja-sales-backdrop.visible { opacity: 1; }
+      .eja-sales-overlay {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) scale(0.96);
+        width: min(900px, 92vw);
+        max-height: 85vh;
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        opacity: 0;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        overflow: hidden;
+      }
+      .eja-sales-overlay.visible { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      .eja-sales-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+        background: rgba(15, 23, 42, 0.9);
+      }
+      .eja-sales-header h2 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .eja-sales-close {
+        background: rgba(148, 163, 184, 0.2);
+        border: none;
+        color: #e2e8f0;
+        padding: 6px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .eja-sales-body {
+        padding: 20px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .eja-sales-section {
+        background: rgba(148, 163, 184, 0.08);
+        border: 1px solid rgba(148, 163, 184, 0.15);
+        border-radius: 12px;
+        padding: 14px;
+      }
+      .eja-sales-section h3 {
+        margin: 0 0 10px 0;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .eja-sales-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
+      }
+      .eja-sales-row:last-child { border-bottom: none; }
+      .eja-sales-row span { font-size: 13px; }
+      .eja-sales-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        background: rgba(34, 197, 94, 0.12);
+        border-radius: 999px;
+        margin-left: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #bbf7d0;
+      }
+      .eja-sales-muted { color: #94a3b8; }
+      .eja-sales-loading { color: #cbd5f5; font-size: 14px; }
+      @media (max-width: 600px) {
+        .eja-sales-row { flex-direction: column; align-items: flex-start; gap: 6px; }
+      }
+    `;
+    document.head.appendChild(style);
+  };
+
+  const buildSalesTotalsHTML = (totals) => {
+    const entries = Object.entries(totals || {});
+    if (!entries.length) return '<span class="eja-sales-muted">Brak sprzedaży</span>';
+    return entries
+      .map(([currency, amount]) => `<span class="eja-sales-chip">${formatNumericValue(amount)} ${currency}</span>`)
+      .join(" ");
+  };
+
+  const buildSalesSummaryHTML = (summaries) => {
+    const dateKeys = getSalesSummaryDateKeys();
+    if (!summaries.length) {
+      return '<div class="eja-sales-muted">Brak danych do podsumowania sprzedaży.</div>';
+    }
+    return summaries
+      .map((summary) => {
+        const rows = dateKeys
+          .map((dateKey) => {
+            const day = summary.days[dateKey] || { totals: {}, count: 0 };
+            return `
+              <div class="eja-sales-row">
+                <span>${formatSalesDateLabel(dateKey)}</span>
+                <span>
+                  ${buildSalesTotalsHTML(day.totals)}
+                  <span class="eja-sales-muted">(${day.count} transakcji)</span>
+                </span>
+              </div>
+            `;
+          })
+          .join("");
+        return `
+          <div class="eja-sales-section">
+            <h3>${summary.entity.name}</h3>
+            ${rows}
+          </div>
+        `;
+      })
+      .join("");
+  };
+
+  const closeSalesSummaryOverlay = () => {
+    salesOverlayOpen = false;
+    const backdrop = document.getElementById("eja-sales-backdrop");
+    const overlay = document.getElementById("eja-sales-overlay");
+    if (backdrop) {
+      backdrop.classList.remove("visible");
+      setTimeout(() => backdrop.remove(), 200);
+    }
+    if (overlay) {
+      overlay.classList.remove("visible");
+      setTimeout(() => overlay.remove(), 200);
+    }
+    if (document.__ejaSalesEscHandler) {
+      document.removeEventListener("keydown", document.__ejaSalesEscHandler);
+      document.__ejaSalesEscHandler = null;
+    }
+  };
+
+  const openSalesSummaryOverlay = async () => {
+    if (salesOverlayOpen) return;
+    salesOverlayOpen = true;
+    ensureSalesSummaryStyles();
+    const backdrop = document.createElement("div");
+    backdrop.id = "eja-sales-backdrop";
+    backdrop.className = "eja-sales-backdrop";
+    const overlay = document.createElement("div");
+    overlay.id = "eja-sales-overlay";
+    overlay.className = "eja-sales-overlay";
+    overlay.innerHTML = `
+      <div class="eja-sales-header">
+        <h2>💰 Podsumowanie sprzedaży</h2>
+        <button class="eja-sales-close" type="button">Zamknij</button>
+      </div>
+      <div class="eja-sales-body">
+        <div class="eja-sales-loading">Ładowanie danych sprzedaży...</div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => {
+      backdrop.classList.add("visible");
+      overlay.classList.add("visible");
+    });
+    const closeBtn = overlay.querySelector(".eja-sales-close");
+    if (closeBtn) closeBtn.addEventListener("click", closeSalesSummaryOverlay);
+    backdrop.addEventListener("click", closeSalesSummaryOverlay);
+    document.__ejaSalesEscHandler = (event) => {
+      if (event.key === "Escape") closeSalesSummaryOverlay();
+    };
+    document.addEventListener("keydown", document.__ejaSalesEscHandler);
+
+    try {
+      const summaries = await buildSalesSummaryData();
+      const body = overlay.querySelector(".eja-sales-body");
+      if (body) body.innerHTML = buildSalesSummaryHTML(summaries);
+    } catch (e) {
+      const body = overlay.querySelector(".eja-sales-body");
+      if (body) body.innerHTML = '<div class="eja-sales-muted">Nie udało się pobrać danych sprzedaży.</div>';
+      console.warn("[EJA Sales] Failed to build summary:", e);
     }
   };
 
@@ -71,6 +609,38 @@
 
   const isSellPage = () => location.pathname === "/market/sell";
   const isJobsPage = () => location.pathname.startsWith("/jobs");
+  const isSettingsPage = () => location.pathname === "/user/settings";
+
+  const loadSettings = () => {
+    if (ejaSettings) return ejaSettings;
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        ejaSettings = { ...DEFAULT_EJA_SETTINGS, ...(parsed || {}) };
+        return ejaSettings;
+      }
+    } catch (e) {
+      console.warn("[EJA] Failed to load settings:", e);
+    }
+    ejaSettings = { ...DEFAULT_EJA_SETTINGS };
+    return ejaSettings;
+  };
+
+  const saveSettings = (nextSettings) => {
+    ejaSettings = { ...DEFAULT_EJA_SETTINGS, ...(nextSettings || {}) };
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(ejaSettings));
+    } catch (e) {
+      console.warn("[EJA] Failed to save settings:", e);
+    }
+    return ejaSettings;
+  };
+
+  const isSettingEnabled = (key) => {
+    const settings = loadSettings();
+    return Boolean(settings[key]);
+  };
 
   // RAW Consumption Consts
   const RAW_CONSUMPTION_RATES = {
@@ -192,6 +762,12 @@
   const getYesterdayDateKey = () => {
     const now = new Date();
     now.setDate(now.getDate() - 1);
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  };
+
+  const getDateKeyDaysAgo = (daysAgo) => {
+    const now = new Date();
+    now.setDate(now.getDate() - daysAgo);
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   };
 
@@ -348,7 +924,8 @@
                   let prodName = prodImg ? prodImg.title || prodImg.alt || "Produkt" : "Produkt";
                   // Add quality suffix if company has quality and product isn't raw resource
                   const isRawResource = /żelazo|iron|zboże|grain|tytan|titanium|paliwo|oil|ropa/i.test(prodName);
-                  if (companyQuality > 0 && !isRawResource) {
+                  const hasQualitySuffix = /\sQ\d+\b/i.test(prodName);
+                  if (companyQuality > 0 && !isRawResource && !hasQualitySuffix) {
                     prodName = `${prodName} Q${companyQuality}`;
                   }
                   if (!productions[prodName]) productions[prodName] = { amount: 0, icon: prodImg?.src || "" };
@@ -1064,8 +1641,10 @@
          `;
     }
 
+    const normalizeSectionName = (name) => (name || "").trim().toLowerCase();
+
     const isPersonalSectionName = (name) => {
-      const normalized = (name || "").toLowerCase().trim();
+      const normalized = normalizeSectionName(name);
       return normalized === "moje firmy" || normalized === "my companies";
     };
 
@@ -1088,6 +1667,15 @@
         // Aggregate capacity (potential production)
         sections[c.section].productions[normName].capacity += data.capacity || data.amount;
       });
+    });
+
+    // Ensure holdings without companies are still visible in 'Centrum Przedsiębiorcy'
+    const sectionKeys = new Set(Object.keys(sections).map((name) => normalizeSectionName(name)));
+    holdingsData.forEach((holding) => {
+      const key = normalizeSectionName(holding?.name);
+      if (!key || sectionKeys.has(key)) return;
+      sections[holding.name] = { name: holding.name, companies: [], wages: {}, productions: {} };
+      sectionKeys.add(key);
     });
 
     // Total production summary
@@ -1144,7 +1732,7 @@
       const empTrend = yesterday ? sectionEmployees - yesterdayEmployees : null;
 
       // Find matching holding for this section
-      const holding = holdingsData.find((h) => h.name.trim().toLowerCase() === sectionName.trim().toLowerCase());
+      const holding = holdingsData.find((h) => normalizeSectionName(h.name) === normalizeSectionName(sectionName));
 
       // Build Holding Info (Merged View)
       let holdingInfoHTML = "";
@@ -1455,10 +2043,10 @@
     ];
 
     const stateCompanies = companies.filter((c) =>
-      STATE_HOLDINGS.some((h) => h.toLowerCase() === (c.section || "").trim().toLowerCase()),
+      STATE_HOLDINGS.some((h) => normalizeSectionName(h) === normalizeSectionName(c.section)),
     );
     const privateCompanies = companies.filter(
-      (c) => !STATE_HOLDINGS.some((h) => h.toLowerCase() === (c.section || "").trim().toLowerCase()),
+      (c) => !STATE_HOLDINGS.some((h) => normalizeSectionName(h) === normalizeSectionName(c.section)),
     );
 
     const calculateStats = (companyList) => {
@@ -1613,28 +2201,6 @@
     } catch {}
   }
 
-  function getCachedHoldings() {
-    try {
-      const raw = localStorage.getItem(CACHE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.holdings)) return [];
-      const age = Date.now() - (parsed.updatedAt || 0);
-      if (age > CACHE_TTL_MS) {
-        if (!holdingsCacheWarned) {
-          holdingsCacheWarned = true;
-          try {
-            console.debug("[EJA] holdings cache expired");
-          } catch {}
-        }
-        return [];
-      }
-      holdingsCacheWarned = false;
-      return parsed.holdings;
-    } catch {}
-    return [];
-  }
-
   const parseHoldingsFromJobsDocument = (doc) => {
     const holdings = [];
     const containers = doc.querySelectorAll(".holdings-container");
@@ -1739,7 +2305,7 @@
   }
 
   async function injectMenuHoldings(root) {
-    if (!EJA_ADD_HOLDINGS_TO_MENU) return;
+    if (!isSettingEnabled("addHoldingsToMenu")) return;
     const doc = root || document;
     const holdings = await getHoldingsFromJobs();
     ensureMenuIconStyle(doc);
@@ -1957,64 +2523,6 @@
     };
   })();
 
-  const getEmployeeTodayData = (employee) => {
-    const worklogRaw = employee.getAttribute("data-worklog") || "";
-    const worklogData = parseWorklogData(worklogRaw);
-    const fallbackWorked = !!employee.querySelector(".fa-check");
-    const todayEntry = worklogData ? worklogData[getTodayKey()] : null;
-    if (!todayEntry) {
-      return {
-        worked: fallbackWorked,
-        productionItems: [],
-        consumptionItems: [],
-      };
-    }
-    return {
-      worked: typeof todayEntry.worked === "boolean" ? todayEntry.worked : fallbackWorked,
-      productionItems: extractItemsFromHtml(todayEntry.production, ".item.production"),
-      consumptionItems: extractItemsFromHtml(todayEntry.consumption, ".item.consumption"),
-    };
-  };
-
-  const resolveRowProductMeta = (row, overrides = {}) => {
-    const overrideLabel = overrides.label || "";
-    const overrideIcon = overrides.icon || "";
-    let iconUrl = overrideIcon;
-    let baseLabel = overrideLabel;
-    const productionImage =
-      row.querySelector(".production-mobile img:last-of-type") || row.querySelector(".production-mobile img");
-    if (productionImage) {
-      if (!iconUrl) iconUrl = productionImage.currentSrc || productionImage.src;
-      if (!baseLabel) baseLabel = productionImage.getAttribute("title") || productionImage.getAttribute("alt") || "";
-    }
-    if (!baseLabel) {
-      baseLabel =
-        row.getAttribute("data-type") ||
-        row.getAttribute("data-name") ||
-        overrides.fallbackName ||
-        row.querySelector(".company-name-h5 span")?.textContent ||
-        "Produkt";
-    }
-    const companyType = row.getAttribute("data-type") || "";
-    const qualityVal = parseInt(row.getAttribute("data-quality"), 10);
-    const normalizedType = (companyType || "").trim().toLowerCase();
-    const isRaw = RAW_RESOURCE_TYPES.has(normalizedType);
-    const qualitySuffix = qualityVal && qualityVal > 0 && !isRaw ? `Q${qualityVal}` : "";
-    const displayLabel = qualitySuffix ? `${baseLabel} ${qualitySuffix}` : baseLabel;
-    return {
-      icon: iconUrl || overrideIcon || "",
-      label: displayLabel,
-      rawLabel: baseLabel,
-      companyType,
-      qualitySuffix,
-    };
-  };
-
-  const resolveEmployeeCurrencyDisplay = (employee) => ({
-    icon: employee.getAttribute("data-currencyavatar") || "",
-    label: employee.getAttribute("data-currencyname") || employee.getAttribute("data-currencycode") || "",
-  });
-
   const getActiveHoldingsContainers = (root = document) => {
     const activeTab = root.querySelector(".tab-pane.show.active");
     const scope = activeTab || root;
@@ -2030,249 +2538,68 @@
     });
   };
 
-  const ensureSummaryStyles = () => {
-    if (document.__ejaSummaryStylesApplied) return;
-    document.__ejaSummaryStylesApplied = true;
-    const style = document.createElement("style");
-    style.setAttribute("data-eja", "summary-style");
-    style.textContent = `
-      .eja-holdings-summary {
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 6px;
-        background: rgba(0, 0, 0, 0.15);
-      }
-      .dark-mode .eja-holdings-summary {
-        background: rgba(255, 255, 255, 0.04);
-        border-color: rgba(255, 255, 255, 0.08);
-      }
-      .eja-summary-table {
-        margin-bottom: 0;
-      }
-      .eja-summary-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 8px;
-        margin: 2px;
-        border-radius: 12px;
-        background: rgba(0, 0, 0, 0.08);
-        font-size: 12px;
-        font-weight: 600;
-        color: inherit;
-      }
-      .dark-mode .eja-summary-chip {
-        background: rgba(255, 255, 255, 0.06);
-      }
-      .eja-summary-chip img {
-        width: 18px;
-        height: 18px;
-        object-fit: contain;
-      }
-      .eja-holdings-summary .font-12 {
-        font-size: 12px !important;
-        line-height: 1.2;
-      }
-    `;
-    (document.head || document.documentElement).appendChild(style);
-  };
-
-  const createEntryGroupElement = (entries, emptyLabel, options = {}) => {
-    const wrapper = document.createElement("div");
-    wrapper.className = "d-flex flex-wrap align-items-center";
-    if (!entries.length) {
-      const empty = document.createElement("span");
-      empty.className = "text-muted font-12";
-      empty.textContent = emptyLabel;
-      wrapper.appendChild(empty);
-      return wrapper;
-    }
-    entries.forEach((entry) => {
-      const chip = document.createElement("div");
-      chip.className = "eja-summary-chip";
-      chip.title = entry.label || entry.key || "";
-      if (entry.icon) {
-        const img = document.createElement("img");
-        img.src = entry.icon;
-        img.alt = entry.label || entry.key || "Ikona";
-        img.referrerPolicy = "no-referrer";
-        chip.appendChild(img);
-      }
-      const text = document.createElement("span");
-      const formattedValue = formatNumericValue(entry.amount, options.numberFormat || {});
-      text.textContent = entry.label ? `${formattedValue} ${entry.label}` : formattedValue;
-      chip.appendChild(text);
-      wrapper.appendChild(chip);
-    });
-    return wrapper;
-  };
-
-  const appendLabeledGroup = (container, title, entries, emptyLabel, options = {}) => {
-    const group = document.createElement("div");
-    group.className = "mb-2";
-    const heading = document.createElement("div");
-    heading.className = "text-muted font-12 text-uppercase mb-1";
-    heading.textContent = title;
-    group.appendChild(heading);
-    group.appendChild(createEntryGroupElement(entries, emptyLabel, options));
-    container.appendChild(group);
-  };
-
-  const isSummaryCollapsed = () => localStorage.getItem(SUMMARY_COLLAPSE_KEY) === "1";
-
-  const setSummaryCollapsed = (collapsed) => {
-    localStorage.setItem(SUMMARY_COLLAPSE_KEY, collapsed ? "1" : "0");
-  };
-
-  const renderSectionSummaryTable = (sections, root = document) => {
-    const containers = getActiveHoldingsContainers(root);
-    const existing = root.querySelector('[data-eja="holdings-summary"]');
-    if (!containers.length) {
+  const injectJobsActionButtons = (root = document) => {
+    const existing = root.querySelector('[data-eja="jobs-action-buttons"]');
+    const dashboardEnabled = isSettingEnabled("dashboardEnabled");
+    const salesEnabled = isSettingEnabled("generateDailySalesSummaries");
+    if (!dashboardEnabled && !salesEnabled) {
       if (existing) existing.remove();
       return;
     }
-    ensureSummaryStyles();
-    const firstContainer = containers[0];
-    let summaryBox = existing;
-    if (!summaryBox) {
-      summaryBox = document.createElement("div");
-      summaryBox.setAttribute("data-eja", "holdings-summary");
-      summaryBox.className = "eja-holdings-summary p-3 mb-3";
-      firstContainer.parentElement.insertBefore(summaryBox, firstContainer);
-    } else if (summaryBox.parentElement !== firstContainer.parentElement) {
-      firstContainer.parentElement.insertBefore(summaryBox, firstContainer);
-    }
-    // Check if button already exists
-    if (summaryBox.querySelector(".eja-open-dashboard-btn")) return;
-    summaryBox.innerHTML = "";
-    const header = document.createElement("div");
-    header.className = "d-flex align-items-center justify-content-between";
-    const title = document.createElement("p");
-    title.className = "font-12 weight-600 mb-0";
-    header.appendChild(title);
-    const dashboardBtn = document.createElement("button");
-    dashboardBtn.type = "button";
-    dashboardBtn.className = "btn btn-primary btn-sm eja-open-dashboard-btn";
-    dashboardBtn.innerHTML = "📊 Otwórz Centrum Przedsiębiorcy";
-    dashboardBtn.style.cssText =
-      "background: linear-gradient(135deg, #3b82f6, #2563eb); border: none; font-weight: 600;";
-    dashboardBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openDashboardOverlay();
-    });
-    header.appendChild(dashboardBtn);
-    summaryBox.appendChild(header);
-    // Quick stats summary
-    const totalEmployees = sections.reduce((sum, s) => {
-      const spent = s.wagesSpent?.length || 0;
-      const pending = s.wagesPending?.length || 0;
-      return sum + spent + pending;
-    }, 0);
-    const statsLine = document.createElement("div");
-    statsLine.className = "font-12 text-muted mt-2";
-    summaryBox.appendChild(statsLine);
-  };
-
-  const RAW_RESOURCE_ITEM_NAMES = new Set(["grain", "zboże", "iron", "żelazo", "titanium", "tytan", "oil", "paliwo"]);
-
-  const normalizeLabelKey = (label, fallback = "") => (label || fallback || "").trim().toLowerCase();
-
-  const collectSectionStats = (root = document) => {
-    const sections = [];
     const containers = getActiveHoldingsContainers(root);
-    containers.forEach((container) => {
-      const headerRow = container.querySelector(".row.closeHoldings[data-target]");
-      const label = headerRow && headerRow.querySelector(".holdings-description span");
-      if (!headerRow || !label) return;
-      const baseLabel = (label.dataset.ejaOriginalLabel || label.textContent || "").trim();
-      const targetKey = (headerRow.getAttribute("data-target") || "").trim();
-      if (!targetKey) return;
-      const targetList = container.querySelector(`.${targetKey}`) || container.querySelector(`#${targetKey}`);
-      if (!targetList) return;
-      const productions = new Map();
-      const rawCosts = new Map();
-      const wagesSpent = new Map();
-      const wagesPending = new Map();
-      const companyRows = targetList.querySelectorAll(".hasBorder[data-id]");
-      companyRows.forEach((row) => {
-        const employees = row.querySelectorAll(".employees_list .employee");
-        employees.forEach((employee) => {
-          const wage = parseNumberValue(employee.getAttribute("data-wage") || employee.dataset.wage);
-          const currencyKey =
-            employee.getAttribute("data-currencyid") ||
-            employee.getAttribute("data-currency") ||
-            employee.getAttribute("data-currencyname") ||
-            "";
-          const todayData = getEmployeeTodayData(employee);
-          if (wage > 0 && currencyKey) {
-            const currencyDisplay = resolveEmployeeCurrencyDisplay(employee);
-            const targetMap = todayData.worked ? wagesSpent : wagesPending;
-            accumulateEntry(targetMap, currencyKey, wage, currencyDisplay);
-          }
-          todayData.productionItems.forEach((productionItem) => {
-            if (!productionItem || productionItem.amount === 0) return;
-            const combinedMeta = resolveRowProductMeta(row, {
-              label: productionItem.label,
-              icon: productionItem.icon,
-            });
-            const productKey = normalizeLabelKey(combinedMeta.rawLabel || combinedMeta.label || "produkt");
-            accumulateEntry(productions, productKey, productionItem.amount, {
-              icon: combinedMeta.icon || productionItem.icon,
-              label: combinedMeta.label || productionItem.label,
-              qualityKey: combinedMeta.qualitySuffix,
-            });
-          });
-          todayData.consumptionItems.forEach((consumptionItem) => {
-            if (!consumptionItem || consumptionItem.amount === 0) return;
-            const labelKey = normalizeLabelKey(consumptionItem.label, "surowiec");
-            const isRaw =
-              RAW_RESOURCE_ITEM_NAMES.has(labelKey) || labelKey.includes("grain") || labelKey.includes("iron");
-            if (!isRaw) return;
-            accumulateEntry(rawCosts, labelKey, -Math.abs(consumptionItem.amount), {
-              icon: consumptionItem.icon || "",
-              label: consumptionItem.label || "Surowiec",
-            });
-          });
-        });
+    if (!containers.length) return;
+    const firstContainer = containers[0];
+    if (!firstContainer?.parentElement) return;
+    if (existing) {
+      if (existing.parentElement !== firstContainer.parentElement) {
+        firstContainer.parentElement.insertBefore(existing, firstContainer);
+      }
+      existing.innerHTML = "";
+    }
+    const wrapper = existing || document.createElement("div");
+    if (!existing) {
+      wrapper.setAttribute("data-eja", "jobs-action-buttons");
+      wrapper.className = "d-flex align-items-center justify-content-end flex-wrap gap-2 mb-3";
+    }
+    if (salesEnabled) {
+      const salesBtn = document.createElement("button");
+      salesBtn.type = "button";
+      salesBtn.className = "btn btn-primary btn-sm mr-2";
+      salesBtn.innerHTML = "💰 Podsumowanie sprzedaży";
+      salesBtn.style.cssText = "background: linear-gradient(135deg, #22c55e, #16a34a); border: none; font-weight: 600;";
+      salesBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openSalesSummaryOverlay();
       });
-      if (!productions.size && !rawCosts.size && !wagesSpent.size && !wagesPending.size) return;
-      sections.push({
-        name: baseLabel,
-        productions: Array.from(productions.values()),
-        rawCosts: Array.from(rawCosts.values()),
-        wagesSpent: Array.from(wagesSpent.values()),
-        wagesPending: Array.from(wagesPending.values()),
+      wrapper.appendChild(salesBtn);
+    }
+    if (dashboardEnabled) {
+      const dashboardBtn = document.createElement("button");
+      dashboardBtn.type = "button";
+      dashboardBtn.className = "btn btn-primary btn-sm";
+      dashboardBtn.innerHTML = "📊 Otwórz Centrum Przedsiębiorcy";
+      dashboardBtn.style.cssText =
+        "background: linear-gradient(135deg, #3b82f6, #2563eb); border: none; font-weight: 600;";
+      dashboardBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openDashboardOverlay();
       });
-    });
-    return sections;
-  };
-
-  // Simple hash for section stats to detect changes
-  const hashSectionStats = (sections) => {
-    if (!sections.length) return "empty";
-    return sections
-      .map((s) => {
-        const prodSum = s.productions.reduce((acc, p) => acc + p.amount, 0);
-        const rawSum = s.rawCosts.reduce((acc, r) => acc + r.amount, 0);
-        const wageSpentSum = s.wagesSpent.reduce((acc, w) => acc + w.amount, 0);
-        const wagePendSum = s.wagesPending.reduce((acc, w) => acc + w.amount, 0);
-        return `${s.name}:${prodSum}:${rawSum}:${wageSpentSum}:${wagePendSum}`;
-      })
-      .join("|");
-  };
-
-  const updateHoldingsSectionSummaries = (root = document) => {
-    const sections = collectSectionStats(root);
-    const newHash = hashSectionStats(sections);
-    // Skip render if data hasn't changed
-    if (newHash === lastSectionStatsHash) return;
-    lastSectionStatsHash = newHash;
-    renderSectionSummaryTable(sections, root);
+      wrapper.appendChild(dashboardBtn);
+    }
+    if (!existing) {
+      firstContainer.parentElement.insertBefore(wrapper, firstContainer);
+    }
   };
 
   const refreshJobsWidgets = (root = document) => {
-    updateHoldingsEmployeeCounts(root);
-    updateHoldingsSectionSummaries(root);
+    if (isSettingEnabled("jobsEnhancements")) {
+      updateHoldingsEmployeeCounts(root);
+    } else {
+      updateHoldingsEmployeeCounts(root, { forceReset: true });
+    }
+    injectJobsActionButtons(root);
   };
 
   const formatEmployeesLabel = (count) => {
@@ -2288,7 +2615,7 @@
     return `${baseLabel.trim()} (${employeesText})`;
   };
 
-  const updateHoldingsEmployeeCounts = (root = document) => {
+  const updateHoldingsEmployeeCounts = (root = document, options = {}) => {
     const containers = root.querySelectorAll(".holdings-container");
     containers.forEach((container) => {
       const headerRow = container.querySelector(".row.closeHoldings[data-target]");
@@ -2298,6 +2625,10 @@
         label.dataset.ejaOriginalLabel = (label.textContent || "").trim();
       }
       const baseLabel = label.dataset.ejaOriginalLabel;
+      if (options.forceReset) {
+        label.textContent = baseLabel;
+        return;
+      }
       const targetKey = (headerRow.getAttribute("data-target") || "").trim();
       if (!targetKey) {
         label.textContent = baseLabel;
@@ -2331,11 +2662,20 @@
     document.__ejaJobsEnhancementsInit = true;
     waitFor(".holdings-container")
       .then(() => {
-        updateHoldingsJobsCacheFromDocument(document);
         const scheduleUpdate = debounce(() => {
-          updateHoldingsJobsCacheFromDocument(document);
-          refreshJobsWidgets(document);
-        }, 150);
+          if (document.__ejaJobsUpdatePending) return;
+          document.__ejaJobsUpdatePending = true;
+          const runner = () => {
+            document.__ejaJobsUpdatePending = false;
+            updateHoldingsJobsCacheFromDocument(document);
+            refreshJobsWidgets(document);
+          };
+          if ("requestIdleCallback" in window) {
+            requestIdleCallback(runner, { timeout: 1200 });
+          } else {
+            setTimeout(runner, 250);
+          }
+        }, 350);
         scheduleUpdate();
         // Observe only the holdings area, not the entire page (performance optimization)
         const holdingsArea =
@@ -2387,7 +2727,9 @@
   };
 
   const start = () => {
-    if (isSellPage()) {
+    initMarketSaleNotificationFilter();
+    injectSettingsPanel();
+    if (isSellPage() && isSettingEnabled("sellPageHelpers")) {
       waitFor("#inventory_selector")
         .then(() => bind(document))
         .catch(() => {});
@@ -2399,7 +2741,7 @@
       const mo = new MutationObserver(scheduleBind);
       mo.observe(document.documentElement, { childList: true, subtree: true });
     }
-    if (EJA_ADD_HOLDINGS_TO_MENU) {
+    if (isSettingEnabled("addHoldingsToMenu")) {
       // Inject into global dropdown menu on all pages
       const injectMenus = debounce(() => injectMenuHoldings(document), 50);
       injectMenus();
@@ -2427,9 +2769,71 @@
         document.addEventListener("click", handler, { capture: true });
       }
     }
-    if (isJobsPage()) {
+    if (
+      isJobsPage() &&
+      (isSettingEnabled("jobsEnhancements") ||
+        isSettingEnabled("dashboardEnabled") ||
+        isSettingEnabled("generateDailySalesSummaries"))
+    ) {
       initJobsPageEnhancements();
     }
+  };
+
+  const injectSettingsPanel = () => {
+    if (!isSettingsPage()) return;
+    const host = document.querySelector(".d-flex.flex-wrap.mb-4");
+    if (!host || host.querySelector('[data-eja="settings-panel"]')) return;
+    const panel = document.createElement("div");
+    panel.className = "col-12 col-lg-6";
+    panel.setAttribute("data-eja", "settings-panel");
+    panel.innerHTML = `
+      <div class="d-flex flex-column alert alert-info">
+        <label class="mb-2" style="font-weight:600;">EJA - Ustawienia skryptu</label>
+        <div class="custom-control custom-switch mb-2">
+          <input type="checkbox" class="custom-control-input" id="eja-setting-menu" data-eja-setting="addHoldingsToMenu">
+          <label class="custom-control-label" for="eja-setting-menu">Holdingi w menu Moje miejsca</label>
+        </div>
+        <div class="custom-control custom-switch mb-2">
+          <input type="checkbox" class="custom-control-input" id="eja-setting-jobs" data-eja-setting="jobsEnhancements">
+          <label class="custom-control-label" for="eja-setting-jobs">Liczba pracowników po nazwie holdingu, w widoku Firmy</label>
+        </div>
+        <div class="custom-control custom-switch mb-2">
+          <input type="checkbox" class="custom-control-input" id="eja-setting-dashboard" data-eja-setting="dashboardEnabled">
+          <label class="custom-control-label" for="eja-setting-dashboard">Centrum Przedsiębiorcy</label>
+        </div>
+        <div class="custom-control custom-switch mb-3">
+          <input type="checkbox" class="custom-control-input" id="eja-setting-sell" data-eja-setting="sellPageHelpers">
+          <label class="custom-control-label" for="eja-setting-sell">Proste sprzedawanie z wybranego magazynu na Głównym Rynku</label>
+        </div>
+        <div class="custom-control custom-switch mb-2">
+          <input type="checkbox" class="custom-control-input" id="eja-setting-hide-sales" data-eja-setting="hideMarketSaleNotifications">
+          <label class="custom-control-label" for="eja-setting-hide-sales">Ukryj powiadomienia o sprzedaży na rynku</label>
+        </div>
+        <div class="custom-control custom-switch mb-3">
+          <input type="checkbox" class="custom-control-input" id="eja-setting-sales-summary" data-eja-setting="generateDailySalesSummaries">
+          <label class="custom-control-label" for="eja-setting-sales-summary">Generuj dzienne podsumowania sprzedaży</label>
+        </div>
+        <button type="button" class="btn btn-primary ml-auto" data-eja-save>Zapamiętaj</button>
+        <small class="text-muted mt-2" data-eja-status>Po zmianie odśwież stronę, aby zastosować ustawienia.</small>
+      </div>
+    `;
+    host.appendChild(panel);
+    const settings = loadSettings();
+    panel.querySelectorAll("input[data-eja-setting]").forEach((input) => {
+      const key = input.getAttribute("data-eja-setting");
+      input.checked = Boolean(settings[key]);
+    });
+    const status = panel.querySelector("[data-eja-status]");
+    const saveBtn = panel.querySelector("button[data-eja-save]");
+    saveBtn.addEventListener("click", () => {
+      const next = { ...loadSettings() };
+      panel.querySelectorAll("input[data-eja-setting]").forEach((input) => {
+        const key = input.getAttribute("data-eja-setting");
+        next[key] = input.checked;
+      });
+      saveSettings(next);
+      if (status) status.textContent = "Zapisano. Odśwież stronę, aby zastosować ustawienia.";
+    });
   };
 
   onReady(start);
