@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Janueszex Assistant by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.4.0
+// @version      1.4.1
 // @description  Janueszex Assistant
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -700,7 +700,7 @@
   const isSellPage = () => location.pathname === "/market/sell";
   const isJobsPage = () => location.pathname.startsWith("/jobs");
   const isSettingsPage = () => location.pathname === "/user/settings";
-  const isCoinAdvancedPage = () => location.pathname === "/market/coin/advanced";
+  const isCoinAdvancedPage = () => /^\/market\/coin(?:\/\d+)?\/advanced(?:\/.*)?$/.test(location.pathname);
 
   const loadSettings = () => {
     if (ejaSettings) return ejaSettings;
@@ -2800,12 +2800,6 @@
       }
       .eja-coin-quick-buy input::placeholder {
         color: rgba(226, 232, 240, 0.7);
-      }
-      .amount_to_buy.form-control {
-        width: 80px !important;
-        max-width: 80px !important;
-        padding: 2px 6px !important;
-        height: 26px !important;
       }
       @media (max-width: 600px) {
         .eja-coin-quick-buy {
