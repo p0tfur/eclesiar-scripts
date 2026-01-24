@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Janueszex Assistant by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.3.2
+// @version      1.3.8
 // @description  Janueszex Assistant
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -17,8 +17,10 @@
 
   const CACHE_KEY = "eja_holdings";
   const CACHE_TTL_MS = 48 * 60 * 60 * 1000; // 48h
+  const HOLDINGS_JOBS_CACHE_TTL_MS = 48 * 60 * 60 * 1000; // 48h
   const SUMMARY_COLLAPSE_KEY = "eja_holdings_summary_collapsed";
   let holdingsCacheWarned = false;
+  let holdingsJobsCache = { updatedAt: 0, holdings: [], inFlight: null };
   let lastSectionStatsHash = null; // Cache hash to skip redundant renders
 
   // Business Dashboard Configuration
@@ -70,9 +72,118 @@
   const isSellPage = () => location.pathname === "/market/sell";
   const isJobsPage = () => location.pathname.startsWith("/jobs");
 
-  // ============================================
-  // BUSINESS DASHBOARD - IndexedDB Functions
-  // ============================================
+  // RAW Consumption Consts
+  const RAW_CONSUMPTION_RATES = {
+    1: 37,
+    2: 75,
+    3: 112,
+    4: 150,
+    5: 187,
+  };
+
+  const COMPANY_TYPE_TO_RAW = {
+    "Fabryka broni": "Żelazo",
+    "Weapon Factory": "Iron",
+    "Fabryka samolotów": "Tytan",
+    "Aircraft Factory": "Titanium",
+    "Fabryka chleba": "Zboże",
+    "Food Factory": "Grain",
+    Piekarnia: "Zboże",
+    Bakery: "Grain",
+  };
+  // Helper to map known raw names to unified Keys
+  const UNIFIED_RAW_NAMES = {
+    Żelazo: "Żelazo",
+    Iron: "Żelazo",
+    Tytan: "Tytan",
+    Titanium: "Tytan",
+    Zboże: "Zboże",
+    Grain: "Zboże",
+    Paliwo: "Paliwo",
+    Fuel: "Paliwo",
+  };
+
+  const RAW_ID_MAP = {
+    1: "Zboże",
+    7: "Żelazo",
+    19: "Tytan",
+    13: "Paliwo",
+  };
+
+  const USER_LANG = localStorage.getItem("ecPlus.language") === "pl" ? "pl" : "en";
+  const PRODUCT_TRANSLATIONS = {
+    // PL -> EN
+    Żelazo: "Iron",
+    Tytan: "Titanium",
+    Zboże: "Grain",
+    Paliwo: "Fuel",
+    Broń: "Weapon",
+    Samolot: "Aircraft",
+    Chleb: "Bread",
+    Bilet: "Ticket",
+    Jedzenie: "Food",
+    // EN -> PL
+    Iron: "Żelazo",
+    Titanium: "Tytan",
+    Grain: "Zboże",
+    Fuel: "Paliwo",
+    Weapon: "Broń",
+    Aircraft: "Samolot",
+    Bread: "Chleb",
+    Ticket: "Bilet",
+    Food: "Jedzenie",
+  };
+
+  const normalizeProductName = (name) => {
+    // Split name and quality (e.g. "Weapon Q5" -> ["Weapon", "Q5"])
+    // or "Żelazo" -> ["Żelazo"]
+    let baseName = name;
+    let suffix = "";
+
+    if (name.includes(" Q")) {
+      const parts = name.split(" Q");
+      baseName = parts[0];
+      // Determine if this is a Raw Material which should NOT have Q
+      const knownRaws = ["Żelazo", "Iron", "Tytan", "Titanium", "Zboże", "Grain", "Paliwo", "Fuel"];
+      // We can't check 'baseName' easily before normalization??
+      // Actually, if we translate baseName later, we can strip Q there.
+      // BUT input "Fuel Q3" splits to "Fuel" + " Q3".
+      // If we normalize "Fuel" -> "Paliwo", we append " Q3" -> "Paliwo Q3".
+      // So we should check baseName here against known RAW names (both languages).
+      if (!knownRaws.includes(baseName)) {
+        suffix = " Q" + parts[1];
+      }
+    }
+
+    // Translate baseName if needed
+    let localized = baseName;
+    if (USER_LANG === "pl") {
+      // If we have English name, translate to PL
+      // Check if baseName is in English keys mapping to PL??
+      // Our dict is mixed. Let's do a direct lookup if key exists.
+      // BUT we need to know source lang.
+      // Let's assume input can be mixed.
+      // Try to find PL equivalent if exists.
+      if (
+        PRODUCT_TRANSLATIONS[baseName] &&
+        !["Żelazo", "Tytan", "Zboże", "Paliwo", "Broń", "Samolot", "Chleb", "Bilet"].includes(baseName)
+      ) {
+        localized = PRODUCT_TRANSLATIONS[baseName];
+      }
+    } else {
+      // Want EN
+      // If input is PL, translate to EN
+      if (
+        PRODUCT_TRANSLATIONS[baseName] &&
+        ["Żelazo", "Tytan", "Zboże", "Paliwo", "Broń", "Samolot", "Chleb", "Bilet"].includes(baseName)
+      ) {
+        localized = PRODUCT_TRANSLATIONS[baseName];
+      }
+    }
+
+    return localized + suffix;
+  };
+
   const getTodayDateKey = () => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -193,7 +304,7 @@
       let sectionName = label ? (label.dataset.ejaOriginalLabel || label.textContent || "").trim() : "Firmy";
       // Clean section name (remove count in parens e.g. "Moje firmy (12)")
       sectionName = sectionName.replace(/\(\d+.*$/, "").trim();
-      
+
       const targetKey = (headerRow.getAttribute("data-target") || "").trim();
       if (!targetKey) return;
       const targetList = container.querySelector(`.${targetKey}`) || container.querySelector(`#${targetKey}`);
@@ -201,7 +312,8 @@
       const companyRows = targetList.querySelectorAll(".hasBorder[data-id]");
       companyRows.forEach((row) => {
         const companyId = row.getAttribute("data-id") || "";
-        const companyName = row.querySelector(".company-name-h5 span, .company-name, h5")?.textContent?.trim() || "Firma";
+        const companyName =
+          row.querySelector(".company-name-h5 span, .company-name, h5")?.textContent?.trim() || "Firma";
         const companyType = row.getAttribute("data-type") || "";
         const companyQuality = parseInt(row.getAttribute("data-quality"), 10) || 0;
         const employees = row.querySelectorAll(".employees_list .employee");
@@ -222,15 +334,18 @@
             try {
               const worklog = JSON.parse(worklogRaw.replace(/&quot;/g, '"'));
               const todayKey = getTodayDateKey().split("-").reverse().slice(0, 2).join("/");
-              const entry = Object.entries(worklog).find(([k]) => k.startsWith(todayKey.split("/")[0] + "/" + todayKey.split("/")[1]));
+              const entry = Object.entries(worklog).find(([k]) =>
+                k.startsWith(todayKey.split("/")[0] + "/" + todayKey.split("/")[1]),
+              );
               if (entry && entry[1] && entry[1].production) {
                 const prodHtml = entry[1].production;
                 const tempDiv = document.createElement("div");
                 tempDiv.innerHTML = prodHtml;
                 tempDiv.querySelectorAll(".item.production").forEach((prodItem) => {
                   const prodImg = prodItem.querySelector("img");
-                  const prodAmount = parseFloat(prodItem.querySelector(".item__amount-representation")?.textContent || "0") || 0;
-                  let prodName = prodImg ? (prodImg.title || prodImg.alt || "Produkt") : "Produkt";
+                  const prodAmount =
+                    parseFloat(prodItem.querySelector(".item__amount-representation")?.textContent || "0") || 0;
+                  let prodName = prodImg ? prodImg.title || prodImg.alt || "Produkt" : "Produkt";
                   // Add quality suffix if company has quality and product isn't raw resource
                   const isRawResource = /żelazo|iron|zboże|grain|tytan|titanium|paliwo|oil|ropa/i.test(prodName);
                   if (companyQuality > 0 && !isRawResource) {
@@ -275,7 +390,80 @@
     return companies;
   };
 
-  // Fetch holding data (bank balance, storage) from holding page
+  const parseStorageItems = (root) => {
+    const items = {};
+    const elements = root.querySelectorAll(".storage-item");
+
+    elements.forEach((el) => {
+      // Try data attributes first (User Storage)
+      let name = el.getAttribute("data-itemname");
+      const id = el.getAttribute("data-itemid");
+
+      // Fallback: Check ID if name is empty
+      if (!name) {
+        if (id && RAW_ID_MAP[id]) name = RAW_ID_MAP[id];
+      }
+
+      // Try image alt (Holding Modal/Page)
+      if (!name) {
+        // Find all images with alt
+        const imgs = el.querySelectorAll("img[alt]");
+        for (const img of imgs) {
+          const alt = img.getAttribute("alt");
+          if (alt && alt.toLowerCase() !== "star" && alt.toLowerCase() !== "stars") {
+            name = alt;
+            break;
+          }
+        }
+      }
+
+      if (!name) return;
+      // Clean name
+      name = name.trim();
+
+      // Amount: User Storage uses .ec-amount, Holding uses .item-amount direct text
+      let amountEl = el.querySelector(".ec-amount");
+      if (!amountEl) {
+        amountEl = el.querySelector(".item-amount");
+      }
+      if (!amountEl) return;
+
+      const amount = parseFloat(amountEl.textContent.replace(/[,.\s]/g, "")) || 0;
+
+      // Quality
+      let quality = parseInt(el.getAttribute("data-itemquality")) || 0;
+      if (!quality) {
+        // Count stars
+        quality = el.querySelectorAll(".item-level img").length;
+      }
+
+      // Map to unified if possible, otherwise keep as is
+      const unified = UNIFIED_RAW_NAMES[name] || name;
+
+      // For non-raw items, distinguish by quality to avoid merging Q4 and Q5
+      const isRaw = ["Żelazo", "Iron", "Tytan", "Titanium", "Zboże", "Grain", "Paliwo", "Fuel", "Ropa", "Oil"].includes(
+        unified,
+      );
+      const key = !isRaw && quality > 0 ? `${unified} Q${quality}` : unified;
+
+      if (!items[key]) items[key] = { amount: 0, quality: quality, rawName: name };
+      items[key].amount += amount;
+    });
+    return items;
+  };
+
+  const fetchUserStorage = async () => {
+    try {
+      const resp = await fetch("/storage");
+      if (!resp.ok) return {};
+      const html = await resp.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      return parseStorageItems(doc);
+    } catch (e) {
+      console.warn("[EJA] Failed to fetch user storage", e);
+      return {};
+    }
+  };
   const fetchHoldingData = async (holdingId, holdingName) => {
     try {
       const url = `${location.origin}/holding/${holdingId}`;
@@ -287,7 +475,8 @@
 
       // Parse storage capacity from modal or page
       // Format: "(64,925/71,250)" or similar
-      let storageUsed = 0, storageCapacity = 0;
+      let storageUsed = 0,
+        storageCapacity = 0;
       const storageText = doc.querySelector(".current-main-storage-capacity")?.parentElement?.textContent || "";
       const storageMatch = storageText.match(/\(([\d.,]+)\/([\d.,]+)\)/);
       if (storageMatch) {
@@ -295,71 +484,75 @@
         storageCapacity = parseFloat(storageMatch[2].replace(/[,.\s]/g, "")) || 0;
       }
 
+      // Parse items BEFORE cleaning up garbage, to ensure we don't accidentally remove storage container
+      const storageItems = parseStorageItems(doc);
+
       // Clean up doc to remove user's wallet info (sidebar, modals, navbar) to avoid false positives
       const garbageSelectors = [
-          ".sidebar", 
-          ".main-sidebar", 
-          ".navbar", 
-          "#allCurrenciesModal", 
-          ".user-panel",
-          ".dropdown-menu",
-          ".main-header"
+        ".sidebar",
+        ".main-sidebar",
+        ".navbar",
+        "#allCurrenciesModal",
+        ".user-panel",
+        ".dropdown-menu",
+        ".main-header",
       ];
-      garbageSelectors.forEach(sel => doc.querySelectorAll(sel).forEach(el => el.remove()));
+      garbageSelectors.forEach((sel) => doc.querySelectorAll(sel).forEach((el) => el.remove()));
 
       // Generic currency parser for holding bank
       const bank = {};
-      
+
       // STRICT Strategy: Only look into specific holding containers.
       // Do NOT scan body or random divs to avoid catching global user wallet.
       const potentialContainers = [
-        ...doc.querySelectorAll(".currencies-list .holding__currency"), 
-        ...doc.querySelectorAll(".holding-info")
+        ...doc.querySelectorAll(".currencies-list .holding__currency"),
+        ...doc.querySelectorAll(".holding-info"),
       ];
-      
+
       // Helper to parse text node: "10.408 IEP" -> {amount: 10408, code: "IEP"}
       const parseText = (txt) => {
         // Matches: "10.408 IEP", "538.394 PLN", "123 GOLD"
         const m = txt.match(/([\d\s.,]+)\s+([A-Z]{3}|Złoto|Gold|Credits)/i);
         if (m) {
-           const valStr = m[1].replace(/\s/g, "");
-           let amount = 0;
-           // Improved parsing logic for Eclesiar formats
-           if (valStr.includes(",") && valStr.includes(".")) {
-             amount = parseFloat(valStr.replace(/\./g, "").replace(",", "."));
-           } else if (valStr.includes(",")) {
-             amount = parseFloat(valStr.replace(",", "."));
-           } else {
-               amount = parseFloat(valStr);
-           }
-           
-           const code = m[2].trim();
-           // Blacklist global currencies that shouldn't appear in holding local bank (usually)
-           // Or just user reported "Gem" / "eac" as noise.
-           if (/Gem|eac/i.test(code)) return null;
-           
-           return { amount, code };
+          const valStr = m[1].replace(/\s/g, "");
+          let amount = 0;
+          // Improved parsing logic for Eclesiar formats
+          if (valStr.includes(",") && valStr.includes(".")) {
+            amount = parseFloat(valStr.replace(/\./g, "").replace(",", "."));
+          } else if (valStr.includes(",")) {
+            amount = parseFloat(valStr.replace(",", "."));
+          } else {
+            amount = parseFloat(valStr);
+          }
+
+          const code = m[2].trim();
+          // Blacklist global currencies that shouldn't appear in holding local bank (usually)
+          // Or just user reported "Gem" / "eac" as noise.
+          if (/Gem|eac/i.test(code)) return null;
+
+          return { amount, code };
         }
         return null;
       };
 
       // Scan items - prioritize strict selector
-      const items = potentialContainers.length > 0 
-          ? potentialContainers 
+      const items =
+        potentialContainers.length > 0
+          ? potentialContainers
           : doc.querySelectorAll(".currencies-list > *, .holding__currency"); // Fallback strictish
 
-      items.forEach(el => {
-          const txt = el.innerText || el.textContent;
-          if (!txt) return;
-          
-          const cleanTxt = txt.replace(/\n/g, " ").trim();
-          if (cleanTxt.length > 50) return;
+      items.forEach((el) => {
+        const txt = el.innerText || el.textContent;
+        if (!txt) return;
 
-          const res = parseText(cleanTxt);
-          if (res && res.code && !bank[res.code]) {
-              const img = el.querySelector("img");
-              bank[res.code] = { amount: res.amount, icon: img?.src || "" };
-          }
+        const cleanTxt = txt.replace(/\n/g, " ").trim();
+        if (cleanTxt.length > 50) return;
+
+        const res = parseText(cleanTxt);
+        if (res && res.code && !bank[res.code]) {
+          const img = el.querySelector("img");
+          bank[res.code] = { amount: res.amount, icon: img?.src || "" };
+        }
       });
 
       return {
@@ -367,6 +560,7 @@
         name: holdingName,
         storage: { used: storageUsed, capacity: storageCapacity, free: storageCapacity - storageUsed },
         bank,
+        items: storageItems,
       };
     } catch (e) {
       console.warn(`[EJA] Failed to fetch holding ${holdingId}:`, e);
@@ -384,8 +578,8 @@
   const calculateWageNeeds = (companies) => {
     const needs = {};
     // Filter companies: only include those in "Moje firmy" / "My companies" section
-    const myCompanies = companies.filter(c => /moje firmy|my companies/i.test(c.section));
-    
+    const myCompanies = companies.filter((c) => /moje firmy|my companies/i.test(c.section));
+
     myCompanies.forEach((c) => {
       Object.entries(c.wages).forEach(([code, data]) => {
         if (!needs[code]) needs[code] = { amount: 0, icon: data.icon };
@@ -676,6 +870,31 @@
         align-items: center;
         gap: 4px;
       }
+      .eja-action-list { display: flex; flex-direction: column; gap: 8px; }
+      .eja-action-item {
+        background: rgba(0,0,0,0.2);
+        padding: 10px;
+        border-radius: 6px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        border-left: 3px solid #64748b;
+      }
+      .eja-action-item.critical { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.1); }
+      .eja-action-item.warning { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
+      .eja-action-item.high { border-left-color: #f59e0b; }
+      .eja-action-btn {
+        font-size: 11px;
+        padding: 4px 8px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 4px;
+        text-decoration: none;
+        color: #e2e8f0;
+        white-space: nowrap;
+        margin-left: 10px;
+      }
+      .eja-action-btn:hover { background: rgba(255,255,255,0.2); }
     `;
     document.head.appendChild(style);
   };
@@ -703,16 +922,23 @@
     const yesterday = await getDailySnapshot(getYesterdayDateKey());
     const companies = collectDashboardCompanyData(document, yesterday);
     const userCurrencies = parseUserCurrencies();
+    let userStorage = {};
+    try {
+      userStorage = await fetchUserStorage();
+    } catch (e) {
+      console.warn("Failed to fetch user storage", e);
+    }
 
-    // Fetch holdings data (bank, storage) from cached holdings list FIRST
+    // Fetch holdings data (bank, storage) from /jobs list (no "Moje miejsca" cache)
     // This allows us to subtract holding bank balance from wage needs
-    const cachedHoldings = getCachedHoldings();
+    const cachedHoldings = await getHoldingsFromJobs();
     let holdingsData = [];
     if (cachedHoldings.length > 0) {
       // Show loading overlay first
       const loadingBackdrop = document.createElement("div");
       loadingBackdrop.className = "eja-dashboard-backdrop visible";
-      loadingBackdrop.innerHTML = '<div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:18px;">⏳ Pobieranie danych holdingów...</div>';
+      loadingBackdrop.innerHTML =
+        '<div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:18px;">⏳ Pobieranie danych holdingów...</div>';
       document.body.appendChild(loadingBackdrop);
       try {
         holdingsData = await fetchAllHoldingsData(cachedHoldings);
@@ -739,7 +965,7 @@
     const overlay = document.createElement("div");
     overlay.id = "eja-dashboard-overlay";
     overlay.className = "eja-dashboard-overlay";
-    overlay.innerHTML = buildDashboardHTML(companies, currencyStatus, yesterday, holdingsData);
+    overlay.innerHTML = buildDashboardHTML(companies, currencyStatus, yesterday, holdingsData, userStorage);
     document.body.appendChild(overlay);
 
     // Bind events
@@ -765,7 +991,84 @@
     document.addEventListener("keydown", escHandler);
   };
 
-  const buildDashboardHTML = (companies, currencyStatus, yesterday, holdingsData = []) => {
+  const buildDashboardHTML = (companies, currencyStatus, yesterday, holdingsData = [], userStorage = {}) => {
+    // --- RAW MATERIAL CALCULATIONS HELPER ---
+    function renderRawMaterialsSection(sectionName, sectionCompanies, holdings, userStorage) {
+      // 1. Calculate Needs
+      const needs = {};
+      sectionCompanies.forEach((c) => {
+        const type = c.type;
+        const rawName = COMPANY_TYPE_TO_RAW[type];
+        // Normalize to unified key (e.g. "Iron" -> "Żelazo")
+        const mappedRaw = UNIFIED_RAW_NAMES[rawName] || rawName;
+
+        if (mappedRaw && c.quality) {
+          const daily = RAW_CONSUMPTION_RATES[c.quality] || 0;
+          if (daily > 0 && c.employeeCount > 0) {
+            if (!needs[mappedRaw]) needs[mappedRaw] = 0;
+            needs[mappedRaw] += daily * c.employeeCount;
+          }
+        }
+      });
+
+      if (Object.keys(needs).length === 0) return "";
+
+      // 2. Find Available Stock
+      let stocks = {};
+
+      // Case-insensitive matching for Holding
+      const holding = holdings.find((h) => h.name.toLowerCase() === sectionName.toLowerCase());
+
+      if (holding) {
+        // Holding Section -> Use Holding Storage ONLY
+        stocks = holding.items || {};
+      } else if (
+        sectionName.toLowerCase().includes("moje") ||
+        sectionName.toLowerCase().includes("own") ||
+        sectionName === "Sektor Prywatny"
+      ) {
+        // Private Section -> Use User Storage
+        stocks = userStorage;
+      } else {
+        // Other sections (e.g. generic Summary?) -> No detailed storage view, or maybe agg?
+        // Leaving empty to avoid confusion with zeros.
+        return "";
+      }
+
+      // 3. Render
+      const rows = Object.entries(needs)
+        .map(([rawName, dailyNeed]) => {
+          const stockItem = stocks[rawName] || { amount: 0 };
+          const have = stockItem.amount || 0;
+          const daysLeft = dailyNeed > 0 ? have / dailyNeed : 0;
+          const statusColor = daysLeft >= 1 ? "#22c55e" : daysLeft > 0.2 ? "#f59e0b" : "#ef4444";
+
+          return `
+               <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:2px;">
+                 <span>${rawName}</span>
+                 <span>
+                    <span style="color:${statusColor};font-weight:600;">${have.toLocaleString()}</span> 
+                    <span style="color:#64748b;"> / ${dailyNeed.toLocaleString()}</span>
+                    ${dailyNeed > 0 ? `<span style="color:${statusColor};margin-left:4px;">(${daysLeft.toFixed(1)}d)</span>` : ""}
+                 </span>
+               </div>
+             `;
+        })
+        .join("");
+
+      return `
+           <div style="margin-top:12px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.05);">
+             <strong style="color:#94a3b8;font-size:11px;display:block;margin-bottom:4px;">MAGAZYN SUROWCÓW (Wymagane na 1 dzień):</strong>
+             ${rows}
+           </div>
+         `;
+    }
+
+    const isPersonalSectionName = (name) => {
+      const normalized = (name || "").toLowerCase().trim();
+      return normalized === "moje firmy" || normalized === "my companies";
+    };
+
     // Group companies by section
     const sections = {};
     companies.forEach((c) => {
@@ -778,8 +1081,12 @@
       });
       // Aggregate productions per section
       Object.entries(c.productions).forEach(([name, data]) => {
-        if (!sections[c.section].productions[name]) sections[c.section].productions[name] = { amount: 0, icon: data.icon };
-        sections[c.section].productions[name].amount += data.amount;
+        const normName = normalizeProductName(name);
+        if (!sections[c.section].productions[normName])
+          sections[c.section].productions[normName] = { amount: 0, capacity: 0, icon: data.icon };
+        sections[c.section].productions[normName].amount += data.amount;
+        // Aggregate capacity (potential production)
+        sections[c.section].productions[normName].capacity += data.capacity || data.amount;
       });
     });
 
@@ -787,8 +1094,9 @@
     const totalProductions = {};
     companies.forEach((c) => {
       Object.entries(c.productions).forEach(([name, data]) => {
-        if (!totalProductions[name]) totalProductions[name] = { amount: 0, icon: data.icon };
-        totalProductions[name].amount += data.amount;
+        const normName = normalizeProductName(name);
+        if (!totalProductions[normName]) totalProductions[normName] = { amount: 0, icon: data.icon };
+        totalProductions[normName].amount += data.amount;
       });
     });
     const totalEmployees = companies.reduce((sum, c) => sum + c.employeeCount, 0);
@@ -811,31 +1119,93 @@
     };
 
     // Build total production chips
-    const totalProdChips = Object.entries(totalProductions)
-      .map(([name, data]) => `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount} ${name}</span>`)
-      .join("") || '<span style="color:#64748b">Brak produkcji</span>';
+    const totalProdChips =
+      Object.entries(totalProductions)
+        .map(
+          ([name, data]) =>
+            `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount} ${name}</span>`,
+        )
+        .join("") || '<span style="color:#64748b">Brak produkcji</span>';
 
-    const totalWagesChips = Object.entries(totalWages)
-      .map(([code, data]) => `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(1)} ${code}</span>`)
-      .join("") || '<span style="color:#64748b">—</span>';
+    const totalWagesChips =
+      Object.entries(totalWages)
+        .map(
+          ([code, data]) =>
+            `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(3)} ${code}</span>`,
+        )
+        .join("") || '<span style="color:#64748b">—</span>';
 
     // Build section HTML
-    const buildSectionHTML = (sectionData, sectionName, yesterday) => {
+    const buildSectionHTML = (sectionData, sectionName, yesterday, holdingsData) => {
       const sectionCompanies = sectionData.companies;
       const sectionEmployees = sectionCompanies.reduce((sum, c) => sum + c.employeeCount, 0);
       const yesterdaySectionCompanies = yesterday?.companies?.filter((c) => c.section === sectionName) || [];
       const yesterdayEmployees = yesterdaySectionCompanies.reduce((sum, c) => sum + (c.employeeCount || 0), 0);
       const empTrend = yesterday ? sectionEmployees - yesterdayEmployees : null;
 
-      // Section wages chips
-      const sectionWagesChips = Object.entries(sectionData.wages)
-        .map(([code, data]) => `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(1)} ${code}</span>`)
-        .join("") || "—";
+      // Find matching holding for this section
+      const holding = holdingsData.find((h) => h.name.trim().toLowerCase() === sectionName.trim().toLowerCase());
 
-      // Section production chips
-      const sectionProdChips = Object.entries(sectionData.productions)
-        .map(([name, data]) => `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount} ${name}</span>`)
-        .join("") || '<span style="color:#64748b">—</span>';
+      // Build Holding Info (Merged View)
+      let holdingInfoHTML = "";
+      if (holding) {
+        // Bank
+        const bankChips =
+          Object.entries(holding.bank || {})
+            .map(
+              ([curr, data]) =>
+                `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toLocaleString()} ${curr}</span>`,
+            )
+            .join("") || '<span style="color:#64748b">—</span>';
+
+        // Storage
+        const storageItems =
+          Object.entries(holding.items || {})
+            .map(([name, data]) => {
+              const qText = data.quality ? ` Q${data.quality}` : "";
+              return `<span class="eja-chip">${data.amount.toLocaleString()} ${name}${qText}</span>`;
+            })
+            .join("") || '<span style="color:#64748b;margin-left:4px;">Pusty</span>';
+
+        if (holding.storage) {
+          const free = holding.storage.free;
+          const capColor = free < 500 ? "#ef4444" : free < 1000 ? "#f59e0b" : "#22c55e";
+          // User requested explicit "Free Space" info
+          const capText = `(Wolne: ${free.toLocaleString()} | ${holding.storage.used.toLocaleString()} / ${holding.storage.capacity.toLocaleString()})`;
+          storageInfoHTML = `<strong style="color:${capColor};font-size:11px;margin-left:4px;">${capText}</strong>`;
+        }
+
+        holdingInfoHTML = `
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.1);">
+                <div style="margin-bottom:8px;">
+                     <strong style="color:#94a3b8;font-size:11px;">STAN BANKU:</strong>
+                     <div style="margin-top:4px;">${bankChips}</div>
+                </div>
+                <div style="display:flex;align-items:center;">
+                     <strong style="color:#94a3b8;font-size:11px;">STAN MAGAZYNU ${storageInfoHTML}:</strong>
+                     <div style="margin-left:8px;display:flex;flex-wrap:wrap;gap:4px;">${storageItems}</div>
+                </div>
+            </div>
+          `;
+      }
+
+      // Section wages chips
+      const sectionWagesChips =
+        Object.entries(sectionData.wages)
+          .map(
+            ([code, data]) =>
+              `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(3)} ${code}</span>`,
+          )
+          .join("") || "—";
+
+      // Section production chips (Now showing CAPACITY/POTENTIAL)
+      const sectionProdChips =
+        Object.entries(sectionData.productions)
+          .map(
+            ([name, data]) =>
+              `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.capacity.toLocaleString()} ${name}</span>`,
+          )
+          .join("") || '<span style="color:#64748b">—</span>';
 
       // Company rows for this section
       const companyRows = sectionCompanies
@@ -843,19 +1213,27 @@
           const yesterdayCompany = yesterday?.companies?.find((yc) => yc.id === c.id);
           const empYesterday = yesterdayCompany?.employeeCount || null;
           const empDiff = empYesterday !== null ? c.employeeCount - empYesterday : null;
-          const trendClass = empDiff === null ? "" : empDiff > 0 ? "eja-trend-up" : empDiff < 0 ? "eja-trend-down" : "eja-trend-same";
-          const trendText = empDiff === null ? "" : empDiff > 0 ? ` (+${empDiff})` : empDiff < 0 ? ` (${empDiff})` : " (=)";
-          const wagesChips = Object.entries(c.wages)
-            .map(([code, data]) => `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(1)} ${code}</span>`)
-            .join("") || "—";
-          const prodChips = Object.entries(c.productions)
-            .map(([name, data]) => {
-              const cap = data.capacity || data.amount;
-              // Show "Amount / Cap" if strictly less, otherwise just Amount
-              const valText = data.amount < cap ? `${data.amount}/${cap}` : `${data.amount}`;
-              return `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${valText} ${name}</span>`;
-            })
-            .join("") || '<span style="color:#64748b">—</span>';
+          const trendClass =
+            empDiff === null ? "" : empDiff > 0 ? "eja-trend-up" : empDiff < 0 ? "eja-trend-down" : "eja-trend-same";
+          const trendText =
+            empDiff === null ? "" : empDiff > 0 ? ` (+${empDiff})` : empDiff < 0 ? ` (${empDiff})` : " (=)";
+          const wagesChips =
+            Object.entries(c.wages)
+              .map(
+                ([code, data]) =>
+                  `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(3)} ${code}</span>`,
+              )
+              .join("") || "—";
+          const prodChips =
+            Object.entries(c.productions)
+              .map(([name, data]) => {
+                const normName = normalizeProductName(name);
+                const cap = data.capacity || data.amount;
+                // Show "Amount / Cap" if strictly less, otherwise just Amount
+                const valText = data.amount < cap ? `${data.amount}/${cap}` : `${data.amount}`;
+                return `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${valText} ${normName}</span>`;
+              })
+              .join("") || '<span style="color:#64748b">—</span>';
           return `<tr>
             <td><strong>${c.name}</strong>${c.quality ? ` Q${c.quality}` : ""}<br><small style="color:#64748b">${c.type}</small></td>
             <td><span class="${trendClass}">👥 ${c.employeeCount}${trendText}</span></td>
@@ -865,8 +1243,8 @@
         })
         .join("");
 
-      const sectionIcon = sectionName.toLowerCase().includes("moje") || sectionName.toLowerCase().includes("own") ? "👤" : "🏢";
-      const empDisplay = yesterday 
+      const sectionIcon = isPersonalSectionName(sectionName) ? "👤" : "🏢";
+      const empDisplay = yesterday
         ? `${sectionEmployees} <span style="font-size:11px;color:#64748b;">(Wczoraj: ${yesterdayEmployees}, <span class="${empTrend > 0 ? "eja-trend-up" : empTrend < 0 ? "eja-trend-down" : "eja-trend-same"}">${empTrend > 0 ? "+" : ""}${empTrend}</span>)</span>`
         : `${sectionEmployees}`;
 
@@ -876,8 +1254,9 @@
           <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px;">
             <div><strong style="color:#94a3b8;font-size:11px;">PRACOWNICY:</strong> ${empDisplay}</div>
             <div><strong style="color:#94a3b8;font-size:11px;">KOSZTY/DZIEŃ:</strong> ${sectionWagesChips}</div>
-            <div><strong style="color:#94a3b8;font-size:11px;">PRODUKCJA:</strong> ${sectionProdChips}</div>
+            <div><strong style="color:#94a3b8;font-size:11px;">PRODUKCJA (MOŻLIWOŚCI):</strong> ${sectionProdChips}</div>
           </div>
+
           <details style="margin-top:8px;">
             <summary style="cursor:pointer;font-size:12px;color:#60a5fa;">Pokaż firmy (${sectionCompanies.length})</summary>
             <table class="eja-company-table" style="margin-top:8px;">
@@ -887,30 +1266,36 @@
               <tbody>${companyRows}</tbody>
             </table>
           </details>
+          ${renderRawMaterialsSection(sectionName, sectionCompanies, holdingsData, userStorage)}
+          ${holdingInfoHTML}
         </div>
       `;
     };
 
     const sectionsHTML = Object.entries(sections)
-      .map(([name, data]) => buildSectionHTML(data, name, yesterday))
+      .map(([name, data]) => buildSectionHTML(data, name, yesterday, holdingsData))
       .join("");
 
     // Build holdings bank & storage display
     const buildHoldingsDataHTML = (holdingsData, sections) => {
-      if (!holdingsData || holdingsData.length === 0) return '';
+      if (!holdingsData || holdingsData.length === 0) return "";
       const holdingCards = holdingsData
-        .filter(h => h.bank && Object.keys(h.bank).length > 0 || h.storage)
-        .map(h => {
+        .filter((h) => (h.bank && Object.keys(h.bank).length > 0) || h.storage)
+        .map((h) => {
           // Bank currencies
-          const bankChips = Object.entries(h.bank || {})
-            .filter(([, data]) => data.amount > 0)
-            // Removed slice(0, 6) limit to show all currencies
-            .map(([code, data]) => `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ''}${data.amount.toFixed(2)} ${code}</span>`)
-            .join('') || '<span style="color:#64748b">Brak środków</span>';
-          
+          const bankChips =
+            Object.entries(h.bank || {})
+              .filter(([, data]) => data.amount > 0)
+              // Removed slice(0, 6) limit to show all currencies
+              .map(
+                ([code, data]) =>
+                  `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(3)} ${code}</span>`,
+              )
+              .join("") || '<span style="color:#64748b">Brak środków</span>';
+
           // Storage info
           const storageInfo = h.storage
-            ? `<span style="color:${h.storage.free < 100 ? '#ef4444' : '#22c55e'};">📦 ${h.storage.used.toLocaleString()} / ${h.storage.capacity.toLocaleString()} (Wolne: ${h.storage.free.toLocaleString()})</span>`
+            ? `<span style="color:${h.storage.free < 100 ? "#ef4444" : "#22c55e"};">📦 ${h.storage.used.toLocaleString()} / ${h.storage.capacity.toLocaleString()} (Wolne: ${h.storage.free.toLocaleString()})</span>`
             : '<span style="color:#64748b">Brak danych</span>';
 
           // Alerts: Check if funds < 2 * daily wages
@@ -930,7 +1315,7 @@
           return `
             <div class="eja-holding-card">
               <div class="eja-holding-header">
-                ${h.icon ? `<img src="${h.icon}" alt="${h.name}" style="width:24px;height:24px;border-radius:4px;">` : '🏢'}
+                ${h.icon ? `<img src="${h.icon}" alt="${h.name}" style="width:24px;height:24px;border-radius:4px;">` : "🏢"}
                 <strong>${h.name}</strong>
               </div>
               ${alerts}
@@ -939,8 +1324,8 @@
             </div>
           `;
         })
-        .join('');
-      if (!holdingCards) return '';
+        .join("");
+      if (!holdingCards) return "";
       return `
         <div class="eja-dashboard-section">
           <h3>🏠 Stan Holdingów</h3>
@@ -949,7 +1334,8 @@
       `;
     };
 
-    const holdingsDataHTML = buildHoldingsDataHTML(holdingsData, sections);
+    // const holdingsDataHTML = buildHoldingsDataHTML(holdingsData, sections); // REMOVED (Merged into Sections)
+    const holdingsDataHTML = "";
 
     // Global currency status (compact grid)
     const currencyCards = Object.entries(currencyStatus)
@@ -957,8 +1343,9 @@
       .sort((a, b) => b[1].need - a[1].need)
       .map(([code, data]) => {
         const color = data.status === "ok" ? "#22c55e" : data.status === "warning" ? "#f59e0b" : "#ef4444";
-        const diffInt = Math.floor(data.diff);
-        const diffText = diffInt >= 0 ? "OK" : diffInt;
+        // Precision: 0.001 per user request
+        const diffInt = data.diff.toFixed(3);
+        const diffText = data.diff >= 0 ? "OK" : diffInt;
         return `
           <div class="eja-currency-compact-item" style="border-left: 3px solid ${color}">
             <div class="eja-currency-compact-header">
@@ -969,11 +1356,11 @@
             </div>
             <div style="display:flex;justify-content:space-between;color:#94a3b8;margin-top:2px;">
                <span>Potrzeba:</span>
-               <strong>${Math.round(data.need)}</strong>
+               <strong>${data.need.toFixed(3)}</strong>
             </div>
             <div style="display:flex;justify-content:space-between;color:#94a3b8;">
                <span>Masz:</span>
-               <span>${Math.round(data.have)}</span>
+               <span>${data.have.toFixed(3)}</span>
             </div>
             ${data.diff < 0 ? `<a href="https://eclesiar.com/market/coin/advanced" target="_blank" class="eja-buy-link" style="text-align:right;margin-top:4px;">Kup braki →</a>` : ""}
           </div>
@@ -981,32 +1368,200 @@
       })
       .join("");
 
+    // --- ACTION ITEMS COLLECTION ---
+    const actionItems = [];
+
+    // 1. Employee departures
+    if (yesterday) {
+      companies.forEach((c) => {
+        const yestC = yesterday.companies?.find((yc) => yc.id === c.id);
+        if (yestC && c.employeeCount < yestC.employeeCount) {
+          const diff = yestC.employeeCount - c.employeeCount;
+          actionItems.push({
+            type: "employee",
+            priority: "high",
+            text: `<b>${c.name}</b> (${c.section}): Odeszło <b>${diff}</b> pracow.`,
+            link: `/business/${c.id}`,
+          });
+        }
+      });
+    }
+
+    // 2. User Currency Shortages
+    Object.entries(currencyStatus).forEach(([code, data]) => {
+      if (data.status === "insufficient") {
+        actionItems.push({
+          type: "currency",
+          priority: "critical",
+          text: `Brakuje <b>${Math.abs(data.diff).toFixed(3)} ${code}</b> na koncie prywatnym.`,
+          link: "https://eclesiar.com/market/coin/advanced",
+        });
+      }
+    });
+
+    // 3. Holding Low Funds
+    holdingsData.forEach((h) => {
+      const section = sections[h.name];
+      if (!section) return;
+      Object.entries(section.wages).forEach(([curr, wageData]) => {
+        const dailyWage = wageData.amount;
+        const bankAmt = h.bank?.[curr]?.amount || 0;
+        if (dailyWage > 0 && bankAmt < dailyWage * 2) {
+          const daysLeft = bankAmt / dailyWage;
+          actionItems.push({
+            type: "holding",
+            priority: "warning",
+            text: `<b>${h.name}</b>: Niski stan <b>${curr}</b> (starczy na ${daysLeft.toFixed(1)} dni).`,
+            link: `/holding/${h.id}`,
+          });
+        }
+      });
+    });
+
+    const buildActionSection = () => {
+      if (actionItems.length === 0) return "";
+
+      const itemsHtml = actionItems
+        .sort((a, b) => (a.priority === "critical" ? -1 : 1)) // Critical first
+        .map(
+          (item) => `
+                <div class="eja-action-item ${item.priority}">
+                    <span>${item.text}</span>
+                    <a href="${item.link}" target="_blank" class="eja-action-btn">Zarządzaj →</a>
+                </div>
+            `,
+        )
+        .join("");
+
+      return `
+            <div class="eja-dashboard-section" style="border: 1px solid #f59e0b; background: rgba(245, 158, 11, 0.05);">
+                <h3 style="color: #f59e0b;">🚨 Wymagane Akcje (${actionItems.length})</h3>
+                <div class="eja-action-list">
+                    ${itemsHtml}
+                </div>
+            </div>
+        `;
+    };
+
+    // --- SPLIT SUMMARY LOGIC ---
+    const STATE_HOLDINGS = [
+      "Polska Kompania Naftowa",
+      "Polska Grupa Żywieniowa",
+      "Polska Grupa Zbrojeniowa",
+      "Ministerstwo Edukacji Narodowej",
+      "Polska Grupa Lotnicza",
+      "Publiczne Firmy",
+      "Public Companies",
+    ];
+
+    const stateCompanies = companies.filter((c) =>
+      STATE_HOLDINGS.some((h) => h.toLowerCase() === (c.section || "").trim().toLowerCase()),
+    );
+    const privateCompanies = companies.filter(
+      (c) => !STATE_HOLDINGS.some((h) => h.toLowerCase() === (c.section || "").trim().toLowerCase()),
+    );
+
+    const calculateStats = (companyList) => {
+      const totalEmps = companyList.reduce((sum, c) => sum + c.employeeCount, 0);
+      const yestEmps =
+        yesterday?.companies
+          ?.filter((yc) => companyList.find((c) => c.id === yc.id))
+          .reduce((sum, c) => sum + (c.employeeCount || 0), 0) || null;
+      const trend = yestEmps !== null ? totalEmps - yestEmps : null;
+
+      const wages = {};
+      const productions = {};
+      const uniqueSections = new Set();
+
+      companyList.forEach((c) => {
+        uniqueSections.add(c.section);
+        Object.entries(c.wages).forEach(([code, data]) => {
+          if (!wages[code]) wages[code] = { amount: 0, icon: data.icon };
+          wages[code].amount += data.amount;
+        });
+        Object.entries(c.productions).forEach(([name, data]) => {
+          if (!productions[name]) productions[name] = { amount: 0, icon: data.icon };
+          productions[name].amount += data.amount;
+        });
+      });
+
+      const wageChips =
+        Object.entries(wages)
+          .map(
+            ([code, data]) =>
+              `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(3)} ${code}</span>`,
+          )
+          .join("") || '<span style="color:#64748b">—</span>';
+
+      const prodChips =
+        Object.entries(productions)
+          .map(
+            ([name, data]) =>
+              `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount} ${name}</span>`,
+          )
+          .join("") || '<span style="color:#64748b">Brak produkcji</span>';
+
+      return {
+        totalEmps,
+        yestEmps,
+        trend,
+        wageChips,
+        prodChips,
+        sectionCount: uniqueSections.size,
+        companyCount: companyList.length,
+      };
+    };
+
+    const stateStats = calculateStats(stateCompanies);
+    const privateStats = calculateStats(privateCompanies);
+
+    const renderSummaryCard = (title, stats, bgColor, icon) => `
+        <div class="eja-dashboard-section" style="background:${bgColor};">
+          <h3>${icon} ${title}</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;">
+            <div><strong style="color:#94a3b8;font-size:11px;display:block;">PRACOWNICY</strong><span style="font-size:20px;font-weight:700;">${buildEmployeeDisplay(stats.totalEmps, stats.yestEmps, stats.trend)}</span></div>
+            <div><strong style="color:#94a3b8;font-size:11px;display:block;">HOLDINGI</strong><span style="font-size:20px;font-weight:700;">${stats.sectionCount}</span></div>
+            <div><strong style="color:#94a3b8;font-size:11px;display:block;">FIRMY</strong><span style="font-size:20px;font-weight:700;">${stats.companyCount}</span></div>
+          </div>
+          <div style="margin-top:12px;">
+            <div><strong style="color:#94a3b8;font-size:11px;">KOSZTY/DZIEŃ:</strong> ${stats.wageChips}</div>
+            <div style="margin-top:6px;"><strong style="color:#94a3b8;font-size:11px;">PRODUKCJA:</strong> ${stats.prodChips}</div>
+          </div>
+        </div>
+    `;
+
+    // Conditional rendering: Show State Sector only if it has companies
+    const showState = stateCompanies.length > 0;
+
+    // If only one card (Private), it will naturally fill the grid thanks to auto-fit + minmax
+    const summariesHTML = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:16px;">
+            ${showState ? renderSummaryCard("Sektor Państwowy", stateStats, "rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.2)", "🏛️") : ""}
+            ${renderSummaryCard("Sektor Prywatny", privateStats, "rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.2)", "💼")}
+        </div>
+    `;
+
     return `
       <div class="eja-dashboard-header">
-        <h2>📊 Centrum Statystyki Przedsiębiorcy</h2>
+        <h2>📊 Centrum Przedsiębiorcy</h2>
         <button class="eja-dashboard-close" title="Zamknij">✕</button>
       </div>
       <div class="eja-dashboard-body">
-        <div class="eja-dashboard-section" style="background:linear-gradient(135deg,rgba(59,130,246,0.15),rgba(37,99,235,0.1));">
-          <h3>📈 Podsumowanie Ogólne</h3>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
-            <div><strong style="color:#94a3b8;font-size:11px;display:block;">PRACOWNICY</strong><span style="font-size:24px;font-weight:700;">${buildEmployeeDisplay(totalEmployees, yesterdayTotalEmployees, totalEmpTrend)}</span></div>
-            <div><strong style="color:#94a3b8;font-size:11px;display:block;">HOLDINGI</strong><span style="font-size:24px;font-weight:700;">${Object.keys(sections).length}</span></div>
-            <div><strong style="color:#94a3b8;font-size:11px;display:block;">FIRMY</strong><span style="font-size:24px;font-weight:700;">${companies.length}</span></div>
-          </div>
-          <div style="margin-top:12px;">
-            <div><strong style="color:#94a3b8;font-size:11px;">ŁĄCZNE KOSZTY/DZIEŃ:</strong> ${totalWagesChips}</div>
-            <div style="margin-top:6px;"><strong style="color:#94a3b8;font-size:11px;">ŁĄCZNA PRODUKCJA:</strong> ${totalProdChips}</div>
-          </div>
-        </div>
+        
+        ${buildActionSection()}
 
+        ${summariesHTML}
 
-        ${currencyCards.length ? `
+        ${
+          currencyCards.length
+            ? `
         <div class="eja-dashboard-section">
           <h3>💰 Bilans Walut (Twoje Konto)</h3>
           <div class="eja-currency-compact-grid">${currencyCards}</div>
         </div>
-        ` : ""}
+        `
+            : ""
+        }
 
         ${holdingsDataHTML}
 
@@ -1080,6 +1635,87 @@
     return [];
   }
 
+  const parseHoldingsFromJobsDocument = (doc) => {
+    const holdings = [];
+    const containers = doc.querySelectorAll(".holdings-container");
+    containers.forEach((container) => {
+      const label = container.querySelector(".holdings-description span");
+      let name = label ? (label.dataset.ejaOriginalLabel || label.textContent || "").trim() : "";
+      if (name) name = name.replace(/\(\d+.*$/, "").trim();
+      if (!name) return;
+
+      const link = container.querySelector('a[href^="/holding/"], a[href*="/holding/"]');
+      const href = link ? link.getAttribute("href") || "" : "";
+      const idMatch = href.match(/\/holding\/(\d+)/);
+      if (!idMatch) return;
+
+      holdings.push({ id: idMatch[1], name, icon: "" });
+    });
+    const unique = new Map();
+    holdings.forEach((h) => {
+      if (!unique.has(h.id)) unique.set(h.id, h);
+    });
+    return Array.from(unique.values());
+  };
+
+  const updateHoldingsJobsCache = (holdings) => {
+    holdingsJobsCache = {
+      updatedAt: Date.now(),
+      holdings,
+      inFlight: null,
+    };
+  };
+
+  const updateHoldingsJobsCacheFromDocument = (root) => {
+    try {
+      const doc = root || document;
+      if (!doc) return;
+      const parsed = parseHoldingsFromJobsDocument(doc);
+      if (parsed.length) updateHoldingsJobsCache(parsed);
+    } catch (e) {
+      console.warn("[EJA] Failed to parse holdings from /jobs document:", e);
+    }
+  };
+
+  const fetchHoldingsFromJobs = async () => {
+    try {
+      const response = await fetch("/jobs", { credentials: "include" });
+      if (!response.ok) return [];
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      return parseHoldingsFromJobsDocument(doc);
+    } catch (e) {
+      console.warn("[EJA] Failed to fetch holdings from /jobs:", e);
+      return [];
+    }
+  };
+
+  const getHoldingsFromJobs = async ({ forceRefresh = false } = {}) => {
+    const now = Date.now();
+    const age = now - (holdingsJobsCache.updatedAt || 0);
+    if (!forceRefresh && holdingsJobsCache.holdings.length && age < HOLDINGS_JOBS_CACHE_TTL_MS) {
+      return holdingsJobsCache.holdings;
+    }
+    if (!forceRefresh && isJobsPage()) {
+      updateHoldingsJobsCacheFromDocument(document);
+      if (holdingsJobsCache.holdings.length) return holdingsJobsCache.holdings;
+    }
+    if (holdingsJobsCache.inFlight) return holdingsJobsCache.inFlight;
+
+    holdingsJobsCache.inFlight = (async () => {
+      const holdings = await fetchHoldingsFromJobs();
+      if (holdings.length) {
+        updateHoldingsJobsCache(holdings);
+        return holdings;
+      }
+      return holdingsJobsCache.holdings || [];
+    })();
+
+    const result = await holdingsJobsCache.inFlight;
+    holdingsJobsCache.inFlight = null;
+    return result;
+  };
+
   function ensureMenuIconStyle(doc) {
     const d = doc || document;
     if (d.__ejaIconStyleApplied) return;
@@ -1102,10 +1738,10 @@
     (d.head || d.documentElement).appendChild(style);
   }
 
-  function injectMenuHoldings(root) {
+  async function injectMenuHoldings(root) {
     if (!EJA_ADD_HOLDINGS_TO_MENU) return;
     const doc = root || document;
-    const holdings = getCachedHoldings();
+    const holdings = await getHoldingsFromJobs();
     ensureMenuIconStyle(doc);
     // Only inject into currently opened dropdowns to avoid redundant work
     // Note: Menu open is detected via class change (.show), not element creation
@@ -1119,7 +1755,7 @@
       // Cleanup previous injected group
       menu.querySelectorAll('[data-eja="holding-link"]').forEach((n) => n.remove());
       menu.querySelectorAll('[data-eja="holdings-divider"]').forEach((n) => n.remove());
-      if (!holdings.length) return; // no links if no fresh cache
+      if (!holdings.length) return; // no links if no holdings
       const divider = document.createElement("div");
       divider.className = "dropdown-divider";
       divider.setAttribute("data-eja", "holdings-divider");
@@ -1151,12 +1787,16 @@
         const label = document.createElement("span");
         label.textContent = `${h.name}`;
         a.appendChild(label);
-        a.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          window.location.href = a.href;
-        }, { capture: true });
+        a.addEventListener(
+          "click",
+          (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            window.location.href = a.href;
+          },
+          { capture: true },
+        );
         menu.appendChild(a);
       });
     });
@@ -1175,7 +1815,7 @@
     const entity = parseEntity(val);
 
     const buttons = Array.from(contextRoot.querySelectorAll("a.create-offer-btn")).filter(
-      (a) => !a.closest(".extra-buy-options")
+      (a) => !a.closest(".extra-buy-options"),
     );
     if (buttons.length === 0) return;
     for (const btn of buttons) {
@@ -1257,7 +1897,7 @@
       "Titanium Mine",
       "Szyb naftowy",
       "Oil Well",
-    ].map((name) => (name || "").trim().toLowerCase())
+    ].map((name) => (name || "").trim().toLowerCase()),
   );
 
   const decodeHtmlEntities = (() => {
@@ -1513,7 +2153,8 @@
     dashboardBtn.type = "button";
     dashboardBtn.className = "btn btn-primary btn-sm eja-open-dashboard-btn";
     dashboardBtn.innerHTML = "📊 Otwórz Centrum Przedsiębiorcy";
-    dashboardBtn.style.cssText = "background: linear-gradient(135deg, #3b82f6, #2563eb); border: none; font-weight: 600;";
+    dashboardBtn.style.cssText =
+      "background: linear-gradient(135deg, #3b82f6, #2563eb); border: none; font-weight: 600;";
     dashboardBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1690,7 +2331,11 @@
     document.__ejaJobsEnhancementsInit = true;
     waitFor(".holdings-container")
       .then(() => {
-        const scheduleUpdate = debounce(() => refreshJobsWidgets(document), 150);
+        updateHoldingsJobsCacheFromDocument(document);
+        const scheduleUpdate = debounce(() => {
+          updateHoldingsJobsCacheFromDocument(document);
+          refreshJobsWidgets(document);
+        }, 150);
         scheduleUpdate();
         // Observe only the holdings area, not the entire page (performance optimization)
         const holdingsArea =
@@ -1731,7 +2376,7 @@
       }
     });
     const buttons = Array.from(contextRoot.querySelectorAll("a.create-offer-btn")).filter(
-      (a) => !a.closest(".extra-buy-options")
+      (a) => !a.closest(".extra-buy-options"),
     );
     buttons.forEach((btn) => {
       if (!btn.__ejaClickBound) {
