@@ -23,7 +23,21 @@
     sellPageHelpers: true,
     hideMarketSaleNotifications: false,
     generateDailySalesSummaries: true,
+    coinAdvancedQuickBuyHoldings: true,
   };
+
+  const refreshAllCoinAdvancedQuickBuy = () => {
+    const wrappers = Array.from(document.querySelectorAll('[data-eja="coin-quick-buy"]'));
+    wrappers.forEach((wrap) => {
+      const refs = wrap.__ejaQuickBuyRefs;
+      if (!refs) return;
+      renderCoinAdvancedFavorites(refs.favorites, refs.items, refreshAllCoinAdvancedQuickBuy);
+      renderCoinAdvancedList(refs.listContainer, refs.items, refs.search.value, refreshAllCoinAdvancedQuickBuy);
+    });
+  };
+
+  const resolveCoinAdvancedOfferRow = (list) =>
+    list.closest("tr, .market-row, .market-offer, .offer-row, .coin-advanced-row, .row") || list.parentElement;
 
   let ejaSettings = null;
 
@@ -32,6 +46,16 @@
   const HOLDINGS_JOBS_CACHE_TTL_MS = 48 * 60 * 60 * 1000; // 48h
   let holdingsCacheWarned = false;
   let holdingsJobsCache = { updatedAt: 0, holdings: [], inFlight: null };
+
+  const clearHoldingsCache = () => {
+    try {
+      localStorage.removeItem(CACHE_KEY);
+    } catch (e) {
+      console.warn("[EJA] Failed to clear holdings cache:", e);
+    }
+    holdingsCacheWarned = false;
+    holdingsJobsCache = { updatedAt: 0, holdings: [], inFlight: null };
+  };
 
   // Business Dashboard Configuration
   const DASHBOARD_DB_NAME = "eja_business_dashboard";
@@ -610,6 +634,7 @@
   const isSellPage = () => location.pathname === "/market/sell";
   const isJobsPage = () => location.pathname.startsWith("/jobs");
   const isSettingsPage = () => location.pathname === "/user/settings";
+  const isCoinAdvancedPage = () => location.pathname === "/market/coin/advanced";
 
   const loadSettings = () => {
     if (ejaSettings) return ejaSettings;
@@ -2412,6 +2437,482 @@
     if (extra && extra.parentElement) extra.parentElement.removeChild(extra);
   };
 
+  const COIN_ADVANCED_RECENT_KEY = "eja_coin_adv_recent_holdings";
+  const COIN_ADVANCED_PINNED_KEY = "eja_coin_adv_pinned_holdings";
+  const COIN_ADVANCED_RECENT_LIMIT = 5;
+
+  const normalizeCoinAdvancedQuery = (value) =>
+    String(value || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const getCoinAdvancedRecentHoldings = () => {
+    try {
+      const raw = localStorage.getItem(COIN_ADVANCED_RECENT_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((id) => id && /^\d+$/.test(String(id)));
+    } catch (e) {
+      console.warn("[EJA] Failed to read recent holdings:", e);
+      return [];
+    }
+  };
+
+  const saveCoinAdvancedRecentHoldings = (items) => {
+    try {
+      localStorage.setItem(COIN_ADVANCED_RECENT_KEY, JSON.stringify(items));
+    } catch (e) {
+      console.warn("[EJA] Failed to save recent holdings:", e);
+    }
+  };
+
+  const getCoinAdvancedPinnedHoldings = () => {
+    try {
+      const raw = localStorage.getItem(COIN_ADVANCED_PINNED_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((id) => id && /^\d+$/.test(String(id)));
+    } catch (e) {
+      console.warn("[EJA] Failed to read pinned holdings:", e);
+      return [];
+    }
+  };
+
+  const saveCoinAdvancedPinnedHoldings = (items) => {
+    try {
+      localStorage.setItem(COIN_ADVANCED_PINNED_KEY, JSON.stringify(items));
+    } catch (e) {
+      console.warn("[EJA] Failed to save pinned holdings:", e);
+    }
+  };
+
+  const toggleCoinAdvancedPinnedHolding = (holdingId) => {
+    if (!holdingId) return [];
+    const list = getCoinAdvancedPinnedHoldings();
+    const next = list.includes(String(holdingId))
+      ? list.filter((id) => String(id) !== String(holdingId))
+      : [...list, String(holdingId)];
+    saveCoinAdvancedPinnedHoldings(next);
+    return next;
+  };
+
+  const bumpCoinAdvancedRecentHolding = (holdingId) => {
+    if (!holdingId) return;
+    const list = getCoinAdvancedRecentHoldings().filter((id) => String(id) !== String(holdingId));
+    list.unshift(String(holdingId));
+    saveCoinAdvancedRecentHoldings(list.slice(0, COIN_ADVANCED_RECENT_LIMIT));
+  };
+
+  const ensureCoinAdvancedQuickBuyStyles = (doc = document) => {
+    if (doc.__ejaCoinAdvancedStylesApplied) return;
+    doc.__ejaCoinAdvancedStylesApplied = true;
+    const style = doc.createElement("style");
+    style.setAttribute("data-eja", "coin-advanced-quick-buy");
+    style.textContent = `
+      .eja-coin-quick-buy {
+        border: none;
+        background: transparent;
+        border-radius: 0;
+        padding: 0;
+        margin: 2px 0 8px;
+        color: inherit;
+        max-width: none;
+        width: auto;
+        position: relative;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+      }
+      .eja-coin-quick-buy-row {
+        width: 100%;
+      }
+      .eja-coin-quick-buy-row td {
+        padding: 6px 0 6px;
+        border-top: 1px solid rgba(148, 163, 184, 0.35);
+        border-bottom: none;
+        background: transparent;
+      }
+      .eja-coin-quick-buy-row + tr td {
+        border-top: none !important;
+      }
+      .eja-coin-offer-row td {
+        border-top: none !important;
+      }
+      .eja-coin-quick-buy__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .eja-coin-quick-buy__title {
+        font-weight: 700;
+        font-size: 12px;
+        color: inherit;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .eja-coin-quick-buy__title span {
+        color: #1d4ed8;
+      }
+      .eja-coin-quick-buy__all-btn {
+        background: #e2e8f0;
+        border: 1px solid #94a3b8;
+        color: #0f172a;
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 6px;
+        white-space: nowrap;
+      }
+      .eja-coin-quick-buy__favorites {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+      }
+      .eja-coin-quick-buy__favorites-label {
+        font-size: 10px;
+        font-weight: 600;
+        color: inherit;
+        margin-right: 4px;
+        opacity: 0.7;
+      }
+      .eja-coin-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .eja-coin-chip__buy {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        white-space: nowrap;
+        line-height: 1.3;
+        background: #2563eb;
+        border: 1px solid #1d4ed8;
+        color: #ffffff;
+      }
+      .eja-coin-chip__buy.is-pinned {
+        font-weight: 700;
+      }
+      .eja-coin-chip__pin {
+        font-size: 12px;
+        width: 26px;
+        height: 22px;
+        border-radius: 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        background: #1f2937;
+        border: 1px solid #334155;
+        color: #ffffff;
+      }
+      .eja-coin-chip__pin.is-pinned {
+        font-weight: 700;
+      }
+      .eja-coin-quick-buy__popover {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        background: #0b1220;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 6px;
+        min-width: 260px;
+        max-width: 360px;
+        z-index: 50;
+        display: none;
+      }
+      .eja-coin-quick-buy__popover.is-open {
+        display: grid;
+        gap: 6px;
+      }
+      .eja-coin-quick-buy__popover-search {
+        height: 26px;
+        font-size: 11px;
+        padding: 2px 6px;
+        background: #111827;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+      }
+      .eja-coin-quick-buy__popover-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        max-height: 180px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+      .eja-coin-quick-buy__popover .eja-coin-chip__buy.is-pinned {
+        font-weight: 700;
+      }
+      .eja-coin-quick-buy input::placeholder {
+        color: rgba(226, 232, 240, 0.7);
+      }
+      .amount_to_buy.form-control {
+        width: 80px !important;
+        max-width: 80px !important;
+        padding: 2px 6px !important;
+        height: 26px !important;
+      }
+    `;
+    (doc.head || doc.documentElement).appendChild(style);
+  };
+
+  const extractCoinAdvancedBuyItems = (extraList) =>
+    Array.from(extraList.querySelectorAll("a.accept-offer"))
+      .map((link) => {
+        const label = (link.textContent || "").replace(/^\s*Kup jako\s*/i, "").trim();
+        return {
+          link,
+          label: label || link.textContent || "",
+          scope: link.getAttribute("data-scope") || "",
+          holdingId: link.getAttribute("data-holdingid") || "",
+          offerId: link.getAttribute("data-offerid") || "",
+        };
+      })
+      .filter((item) => item.label);
+
+  const triggerCoinAdvancedBuy = (item) => {
+    if (!item?.link) return;
+    try {
+      item.link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    } catch (e) {
+      console.warn("[EJA] Failed to trigger buy action:", e);
+      try {
+        item.link.click();
+      } catch {}
+    }
+    if (item.scope === "holding" && item.holdingId) {
+      bumpCoinAdvancedRecentHolding(item.holdingId);
+    }
+  };
+
+  const buildCoinAdvancedChip = (item, { onPinToggle, onBuy, showPin = false } = {}) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "eja-coin-chip";
+    const pinnedIds = getCoinAdvancedPinnedHoldings();
+    const isPinned = item.holdingId && pinnedIds.includes(String(item.holdingId));
+
+    const buyBtn = document.createElement("button");
+    buyBtn.type = "button";
+    buyBtn.className = `btn-action-blue eja-coin-chip__buy${isPinned ? " is-pinned" : ""}`;
+    buyBtn.textContent = item.label;
+    buyBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onBuy) onBuy(item);
+    });
+    wrapper.appendChild(buyBtn);
+
+    if (showPin && item.holdingId) {
+      const pinBtn = document.createElement("button");
+      pinBtn.type = "button";
+      pinBtn.className = `btn-action-blue eja-coin-chip__pin${isPinned ? " is-pinned" : ""}`;
+      pinBtn.title = isPinned ? "Odepnij" : "Przypnij";
+      pinBtn.textContent = isPinned ? "★" : "☆";
+      pinBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleCoinAdvancedPinnedHolding(item.holdingId);
+        if (onPinToggle) onPinToggle();
+      });
+      wrapper.appendChild(pinBtn);
+    }
+    return wrapper;
+  };
+
+  const renderCoinAdvancedFavorites = (container, items, refreshAll) => {
+    const pinnedIds = getCoinAdvancedPinnedHoldings();
+    container.innerHTML = "";
+    if (!pinnedIds.length) {
+      container.style.display = "none";
+      return;
+    }
+    const label = document.createElement("span");
+    label.className = "eja-coin-quick-buy__favorites-label";
+    label.textContent = "Przypięte:";
+    container.appendChild(label);
+    pinnedIds
+      .map((id) => items.find((item) => item.holdingId === id))
+      .filter(Boolean)
+      .forEach((item) => {
+        const chip = buildCoinAdvancedChip(item, {
+          onPinToggle: refreshAll,
+          onBuy: triggerCoinAdvancedBuy,
+          showPin: false,
+        });
+        container.appendChild(chip);
+      });
+    container.style.display = "flex";
+  };
+
+  const renderCoinAdvancedList = (container, items, query, refreshAll) => {
+    const normalizedQuery = normalizeCoinAdvancedQuery(query);
+    const entries = items.filter((item) =>
+      normalizedQuery ? normalizeCoinAdvancedQuery(item.label).includes(normalizedQuery) : true,
+    );
+    container.innerHTML = "";
+    if (!entries.length) {
+      const empty = document.createElement("div");
+      empty.style.fontSize = "11px";
+      empty.style.color = "#64748b";
+      empty.textContent = "Brak dopasowań.";
+      container.appendChild(empty);
+      return;
+    }
+    entries.forEach((item) => {
+      container.appendChild(
+        buildCoinAdvancedChip(item, {
+          onPinToggle: refreshAll,
+          onBuy: triggerCoinAdvancedBuy,
+          showPin: true,
+        }),
+      );
+    });
+  };
+
+  const enhanceCoinAdvancedQuickBuy = (root = document) => {
+    if (!isCoinAdvancedPage() || !isSettingEnabled("coinAdvancedQuickBuyHoldings")) return;
+    ensureCoinAdvancedQuickBuyStyles(root);
+    const lists = Array.from(root.querySelectorAll(".extra-buy-options"));
+    const renderForList = (list) => {
+      if (list.__ejaQuickBuyReady) return;
+      const items = extractCoinAdvancedBuyItems(list);
+      if (!items.length) return;
+      list.__ejaQuickBuyReady = true;
+      const wrapper = document.createElement("div");
+      wrapper.className = "eja-coin-quick-buy";
+      wrapper.setAttribute("data-eja", "coin-quick-buy");
+
+      const header = document.createElement("div");
+      header.className = "eja-coin-quick-buy__header";
+      wrapper.appendChild(header);
+
+      const title = document.createElement("div");
+      title.className = "eja-coin-quick-buy__title";
+      title.innerHTML = "⚡ <span>Szybki zakup</span>";
+      header.appendChild(title);
+
+      const allBtn = document.createElement("button");
+      allBtn.type = "button";
+      allBtn.className = "eja-coin-quick-buy__all-btn";
+      allBtn.textContent = "Pokaż wszystkie";
+      header.appendChild(allBtn);
+
+      const favorites = document.createElement("div");
+      favorites.className = "eja-coin-quick-buy__favorites";
+      wrapper.appendChild(favorites);
+
+      const popover = document.createElement("div");
+      popover.className = "eja-coin-quick-buy__popover";
+      wrapper.appendChild(popover);
+
+      const search = document.createElement("input");
+      search.type = "text";
+      search.className = "form-control form-control-sm eja-coin-quick-buy__popover-search";
+      search.placeholder = "Szukaj holdingu";
+      popover.appendChild(search);
+
+      const listContainer = document.createElement("div");
+      listContainer.className = "eja-coin-quick-buy__popover-list";
+      popover.appendChild(listContainer);
+
+      wrapper.__ejaQuickBuyRefs = {
+        items,
+        favorites,
+        listContainer,
+        search,
+      };
+
+      const refreshAll = () => {
+        refreshAllCoinAdvancedQuickBuy();
+      };
+
+      allBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        popover.classList.toggle("is-open");
+        if (popover.classList.contains("is-open")) {
+          search.focus();
+        }
+      });
+
+      search.addEventListener("input", () => {
+        renderCoinAdvancedList(listContainer, items, search.value, refreshAll);
+      });
+
+      if (!document.__ejaCoinQuickBuyPopoverHandler) {
+        document.__ejaCoinQuickBuyPopoverHandler = true;
+        document.addEventListener(
+          "click",
+          (e) => {
+            const target = e.target;
+            const wrappers = Array.from(document.querySelectorAll('[data-eja="coin-quick-buy"]'));
+            wrappers.forEach((wrap) => {
+              const pop = wrap.querySelector(".eja-coin-quick-buy__popover");
+              if (!pop || !pop.classList.contains("is-open")) return;
+              if (target && wrap.contains(target)) return;
+              pop.classList.remove("is-open");
+            });
+          },
+          { capture: true },
+        );
+      }
+
+      refreshAll();
+
+      const toggle = list.parentElement?.querySelector(".extra-buy-toggle");
+      if (toggle) toggle.style.display = "none";
+      list.style.display = "none";
+
+      const offerRow = resolveCoinAdvancedOfferRow(list);
+      if (offerRow && offerRow.tagName === "TR" && offerRow.parentElement) {
+        offerRow.classList.add("eja-coin-offer-row");
+        const row = document.createElement("tr");
+        row.className = "eja-coin-quick-buy-row";
+        const cell = document.createElement("td");
+        cell.colSpan = offerRow.children.length || 1;
+        cell.appendChild(wrapper);
+        row.appendChild(cell);
+        offerRow.parentElement.insertBefore(row, offerRow);
+      } else if (offerRow && offerRow.parentElement) {
+        wrapper.classList.add("eja-coin-quick-buy-row");
+        offerRow.parentElement.insertBefore(wrapper, offerRow);
+      } else if (list.parentElement) {
+        wrapper.classList.add("eja-coin-quick-buy-row");
+        list.parentElement.insertBefore(wrapper, list);
+      }
+    };
+
+    const immediate = lists.slice(0, 3);
+    const deferred = lists.slice(3);
+    immediate.forEach(renderForList);
+    if (deferred.length) {
+      requestAnimationFrame(() => deferred.forEach(renderForList));
+    }
+  };
+
+  const initCoinAdvancedQuickBuy = () => {
+    if (!isCoinAdvancedPage() || !isSettingEnabled("coinAdvancedQuickBuyHoldings")) return;
+    if (document.__ejaCoinAdvancedObserver) return;
+    const apply = debounce(() => enhanceCoinAdvancedQuickBuy(document), 30);
+    apply();
+    const target =
+      document.querySelector(".table") ||
+      document.querySelector(".table-responsive") ||
+      document.querySelector("main") ||
+      document.body;
+    const observer = new MutationObserver(apply);
+    observer.observe(target, { childList: true, subtree: true });
+    document.__ejaCoinAdvancedObserver = observer;
+  };
+
   const parseNumberValue = (value) => {
     if (typeof value === "number") return Number.isFinite(value) ? value : 0;
     if (!value) return 0;
@@ -2729,6 +3230,9 @@
   const start = () => {
     initMarketSaleNotificationFilter();
     injectSettingsPanel();
+    if (isCoinAdvancedPage()) {
+      initCoinAdvancedQuickBuy();
+    }
     if (isSellPage() && isSettingEnabled("sellPageHelpers")) {
       waitFor("#inventory_selector")
         .then(() => bind(document))
@@ -2805,6 +3309,10 @@
           <input type="checkbox" class="custom-control-input" id="eja-setting-sell" data-eja-setting="sellPageHelpers">
           <label class="custom-control-label" for="eja-setting-sell">Proste sprzedawanie z wybranego magazynu na Głównym Rynku</label>
         </div>
+        <div class="custom-control custom-switch mb-3">
+          <input type="checkbox" class="custom-control-input" id="eja-setting-coin-quick-buy" data-eja-setting="coinAdvancedQuickBuyHoldings">
+          <label class="custom-control-label" for="eja-setting-coin-quick-buy">Szybki zakup dla holdingów na rynku walut</label>
+        </div>
         <div class="custom-control custom-switch mb-2">
           <input type="checkbox" class="custom-control-input" id="eja-setting-hide-sales" data-eja-setting="hideMarketSaleNotifications">
           <label class="custom-control-label" for="eja-setting-hide-sales">Ukryj powiadomienia o sprzedaży na rynku</label>
@@ -2813,7 +3321,15 @@
           <input type="checkbox" class="custom-control-input" id="eja-setting-sales-summary" data-eja-setting="generateDailySalesSummaries">
           <label class="custom-control-label" for="eja-setting-sales-summary">Generuj dzienne podsumowania sprzedaży</label>
         </div>
-        <button type="button" class="btn btn-primary ml-auto" data-eja-save>Zapamiętaj</button>
+        <div class="d-flex flex-wrap justify-content-end gap-2">
+          <button
+            type="button"
+            class="btn btn-outline-secondary btn-sm"
+            data-eja-clear-holdings-cache
+            title="Użyj po dodaniu nowego holdingu, aby odświeżyć listę bez czekania 48h."
+          >Wyczyść cache holdingów</button>
+          <button type="button" class="btn btn-primary ml-auto" data-eja-save>Zapamiętaj</button>
+        </div>
         <small class="text-muted mt-2" data-eja-status>Po zmianie odśwież stronę, aby zastosować ustawienia.</small>
       </div>
     `;
@@ -2825,6 +3341,13 @@
     });
     const status = panel.querySelector("[data-eja-status]");
     const saveBtn = panel.querySelector("button[data-eja-save]");
+    const clearCacheBtn = panel.querySelector("button[data-eja-clear-holdings-cache]");
+    if (clearCacheBtn) {
+      clearCacheBtn.addEventListener("click", () => {
+        clearHoldingsCache();
+        if (status) status.textContent = "Wyczyszczono cache holdingów. Odśwież /jobs, aby pobrać nową listę.";
+      });
+    }
     saveBtn.addEventListener("click", () => {
       const next = { ...loadSettings() };
       panel.querySelectorAll("input[data-eja-setting]").forEach((input) => {
