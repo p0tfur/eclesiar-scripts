@@ -2714,6 +2714,9 @@
         gap: 4px;
         align-items: center;
       }
+      .eja-coin-quick-buy__favorites > * {
+        max-width: 100%;
+      }
       .eja-coin-quick-buy__favorites-label {
         font-size: 10px;
         font-weight: 600;
@@ -2725,6 +2728,7 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
+        max-width: 100%;
       }
       .eja-coin-chip__buy {
         font-size: 10px;
@@ -2735,6 +2739,9 @@
         background: #2563eb;
         border: 1px solid #1d4ed8;
         color: #ffffff;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .eja-coin-chip__buy.is-pinned {
         font-weight: 700;
@@ -2799,6 +2806,28 @@
         max-width: 80px !important;
         padding: 2px 6px !important;
         height: 26px !important;
+      }
+      @media (max-width: 600px) {
+        .eja-coin-quick-buy {
+          width: 100%;
+        }
+        .eja-coin-quick-buy__header {
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+        .eja-coin-quick-buy__favorites {
+          width: 100%;
+        }
+        .eja-coin-quick-buy__all-btn {
+          width: 100%;
+          justify-content: center;
+        }
+        .eja-coin-quick-buy__popover {
+          left: 0;
+          right: auto;
+          width: min(92vw, 360px);
+          max-width: 92vw;
+        }
       }
     `;
     (doc.head || doc.documentElement).appendChild(style);
