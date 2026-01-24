@@ -39,6 +39,20 @@
     });
   };
 
+  const isJobsMutationRelevant = (mutations) => {
+    if (!Array.isArray(mutations) || mutations.length === 0) return true;
+    const selectors = ".holdings-container, .employees_list, [data-employees], .holdings-description, .tab-content";
+    return mutations.some((mutation) => {
+      const target = mutation.target;
+      if (target && target.matches && target.matches(selectors)) return true;
+      if (target && target.closest && target.closest(".holdings-container")) return true;
+      const nodes = [...mutation.addedNodes, ...mutation.removedNodes];
+      return nodes.some(
+        (node) => node.nodeType === 1 && (node.matches?.(selectors) || node.querySelector?.(selectors)),
+      );
+    });
+  };
+
   const initUmamiTracking = () => {
     if (!UMAMI_SCRIPT_URL || !UMAMI_WEBSITE_ID) return;
     if (document.querySelector(`script[data-website-id="${UMAMI_WEBSITE_ID}"]`)) return;
@@ -310,6 +324,7 @@
     let keepFetching = true;
 
     while (keepFetching && page <= 200) {
+      if (!salesOverlayOpen) break;
       const doc = await fetchTransactionsDocument(entity, page);
       if (!doc) break;
       const rows = Array.from(doc.querySelectorAll("table.table tbody tr"));
@@ -342,6 +357,9 @@
       });
       if (reachedOld) break;
       page += 1;
+      if (page % 2 === 0) {
+        await yieldToMainThread();
+      }
     }
     return summary;
   };
@@ -361,6 +379,7 @@
       return { entity, days };
     }
     const days = await collectSalesForEntity(entity, dateKeys);
+    if (!salesOverlayOpen) return { entity, days };
     await Promise.all(
       dateKeys.map((dateKey) =>
         saveSalesSummaryCache({
@@ -400,7 +419,7 @@
   };
 
   const buildSalesSummaryData = async () => {
-    if (!isSettingEnabled("generateDailySalesSummaries")) return [];
+    if (!isSettingEnabled("generateDailySalesSummaries") || !salesOverlayOpen) return [];
     const dateKeys = getSalesSummaryDateKeys();
     const entities = await getSalesSummaryEntities();
     const summaries = await Promise.all(entities.map((entity) => getSalesSummaryForEntity(entity, dateKeys)));
@@ -551,8 +570,15 @@
       .join("");
   };
 
+  const updateJobsOverlayPause = () => {
+    document.__ejaJobsPause = dashboardOverlayOpen || salesOverlayOpen;
+  };
+
+  const yieldToMainThread = () => new Promise((resolve) => setTimeout(resolve, 0));
+
   const closeSalesSummaryOverlay = () => {
     salesOverlayOpen = false;
+    updateJobsOverlayPause();
     const backdrop = document.getElementById("eja-sales-backdrop");
     const overlay = document.getElementById("eja-sales-overlay");
     if (backdrop) {
@@ -591,6 +617,7 @@
       return;
     }
     salesOverlayOpen = true;
+    updateJobsOverlayPause();
     ensureSalesSummaryStyles();
     const backdrop = document.createElement("div");
     backdrop.id = "eja-sales-backdrop";
@@ -615,8 +642,12 @@
       clearSalesButtonLoading(triggerButton);
     });
     const closeBtn = overlay.querySelector(".eja-sales-close");
-    if (closeBtn) closeBtn.addEventListener("click", closeSalesSummaryOverlay);
+    if (closeBtn) {
+      closeBtn.addEventListener("click", closeSalesSummaryOverlay);
+      closeBtn.addEventListener("pointerdown", closeSalesSummaryOverlay);
+    }
     backdrop.addEventListener("click", closeSalesSummaryOverlay);
+    backdrop.addEventListener("pointerdown", closeSalesSummaryOverlay);
     document.__ejaSalesEscHandler = (event) => {
       if (event.key === "Escape") closeSalesSummaryOverlay();
     };
@@ -624,6 +655,7 @@
 
     try {
       const summaries = await buildSalesSummaryData();
+      if (!salesOverlayOpen) return;
       const body = overlay.querySelector(".eja-sales-body");
       if (body) body.innerHTML = buildSalesSummaryHTML(summaries);
     } catch (e) {
@@ -1574,6 +1606,7 @@
 
   const closeDashboardOverlay = () => {
     dashboardOverlayOpen = false;
+    updateJobsOverlayPause();
     const backdrop = document.getElementById("eja-dashboard-backdrop");
     const overlay = document.getElementById("eja-dashboard-overlay");
     if (backdrop) {
@@ -1584,69 +1617,61 @@
       overlay.classList.remove("visible");
       setTimeout(() => overlay.remove(), 200);
     }
+    if (document.__ejaDashboardEscHandler) {
+      document.removeEventListener("keydown", document.__ejaDashboardEscHandler);
+      document.__ejaDashboardEscHandler = null;
+    }
   };
 
   const openDashboardOverlay = async () => {
     if (dashboardOverlayOpen) return;
     dashboardOverlayOpen = true;
+    updateJobsOverlayPause();
     ensureDashboardStyles();
-
-    // Collect initial data
-    const yesterday = await getDailySnapshot(getYesterdayDateKey());
-    const companies = collectDashboardCompanyData(document, yesterday);
-    const userCurrencies = parseUserCurrencies();
-    let userStorage = {};
-    try {
-      userStorage = await fetchUserStorage();
-    } catch (e) {
-      console.warn("Failed to fetch user storage", e);
-    }
-
-    // Fetch holdings data (bank, storage) from /jobs list (no "Moje miejsca" cache)
-    // This allows us to subtract holding bank balance from wage needs
-    const cachedHoldings = await getHoldingsFromJobs();
-    let holdingsData = [];
-    if (cachedHoldings.length > 0) {
-      // Show loading overlay first
-      const loadingBackdrop = document.createElement("div");
-      loadingBackdrop.className = "eja-dashboard-backdrop visible";
-      loadingBackdrop.innerHTML =
-        '<div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:18px;">⏳ Pobieranie danych holdingów...</div>';
-      document.body.appendChild(loadingBackdrop);
-      try {
-        holdingsData = await fetchAllHoldingsData(cachedHoldings);
-      } catch (e) {
-        console.warn("[EJA] Error fetching holdings:", e);
-      }
-      loadingBackdrop.remove();
-    }
-
-    // Calculate needs (Reverted to simple calculation)
-    const wageNeeds = calculateWageNeeds(companies);
-    const currencyStatus = calculateCurrencyStatus(userCurrencies, wageNeeds);
-
-    // Save today's snapshot
-    await saveDailySnapshot({ companies, currencies: userCurrencies, holdings: holdingsData });
-
-    // Create UI
     const backdrop = document.createElement("div");
     backdrop.id = "eja-dashboard-backdrop";
     backdrop.className = "eja-dashboard-backdrop";
-    backdrop.addEventListener("click", closeDashboardOverlay);
     document.body.appendChild(backdrop);
 
     const overlay = document.createElement("div");
     overlay.id = "eja-dashboard-overlay";
     overlay.className = "eja-dashboard-overlay";
-    overlay.innerHTML = buildDashboardHTML(companies, currencyStatus, yesterday, holdingsData, userStorage);
+    overlay.innerHTML = `
+      <div class="eja-dashboard-header">
+        <h2>📊 Centrum Przedsiębiorcy</h2>
+        <button class="eja-dashboard-close" title="Zamknij">✕</button>
+      </div>
+      <div class="eja-dashboard-body">
+        <div class="eja-dashboard-loading">⏳ Ładowanie danych...</div>
+      </div>
+      <div class="eja-dashboard-footer">
+        <span>Trwa ładowanie...</span>
+        <button class="eja-dashboard-btn eja-refresh-btn" disabled>⏳</button>
+      </div>
+    `;
     document.body.appendChild(overlay);
 
-    // Bind events
-    overlay.querySelector(".eja-dashboard-close").addEventListener("click", closeDashboardOverlay);
-    overlay.querySelector(".eja-refresh-btn")?.addEventListener("click", async () => {
-      closeDashboardOverlay();
-      setTimeout(() => openDashboardOverlay(), 100);
-    });
+    const bindDashboardEvents = () => {
+      const closeBtn = overlay.querySelector(".eja-dashboard-close");
+      if (closeBtn) {
+        closeBtn.addEventListener("click", closeDashboardOverlay);
+        closeBtn.addEventListener("pointerdown", closeDashboardOverlay);
+      }
+      backdrop.addEventListener("click", closeDashboardOverlay);
+      backdrop.addEventListener("pointerdown", closeDashboardOverlay);
+      overlay.querySelector(".eja-refresh-btn")?.addEventListener("click", async () => {
+        closeDashboardOverlay();
+        setTimeout(() => openDashboardOverlay(), 100);
+      });
+      document.__ejaDashboardEscHandler = (e) => {
+        if (e.key === "Escape" && dashboardOverlayOpen) {
+          closeDashboardOverlay();
+        }
+      };
+      document.addEventListener("keydown", document.__ejaDashboardEscHandler);
+    };
+
+    bindDashboardEvents();
 
     // Animate in
     requestAnimationFrame(() => {
@@ -1654,14 +1679,49 @@
       overlay.classList.add("visible");
     });
 
-    // ESC to close
-    const escHandler = (e) => {
-      if (e.key === "Escape" && dashboardOverlayOpen) {
-        closeDashboardOverlay();
-        document.removeEventListener("keydown", escHandler);
+    try {
+      // Collect initial data
+      const yesterday = await getDailySnapshot(getYesterdayDateKey());
+      if (!dashboardOverlayOpen) return;
+      const companies = collectDashboardCompanyData(document, yesterday);
+      const userCurrencies = parseUserCurrencies();
+      let userStorage = {};
+      try {
+        userStorage = await fetchUserStorage();
+      } catch (e) {
+        console.warn("Failed to fetch user storage", e);
       }
-    };
-    document.addEventListener("keydown", escHandler);
+
+      // Fetch holdings data (bank, storage) from /jobs list (no "Moje miejsca" cache)
+      // This allows us to subtract holding bank balance from wage needs
+      const cachedHoldings = await getHoldingsFromJobs();
+      let holdingsData = [];
+      if (cachedHoldings.length > 0) {
+        try {
+          holdingsData = await fetchAllHoldingsData(cachedHoldings);
+        } catch (e) {
+          console.warn("[EJA] Error fetching holdings:", e);
+        }
+      }
+
+      if (!dashboardOverlayOpen) return;
+
+      // Calculate needs (Reverted to simple calculation)
+      const wageNeeds = calculateWageNeeds(companies);
+      const currencyStatus = calculateCurrencyStatus(userCurrencies, wageNeeds);
+
+      // Save today's snapshot
+      await saveDailySnapshot({ companies, currencies: userCurrencies, holdings: holdingsData });
+      if (!dashboardOverlayOpen) return;
+
+      overlay.innerHTML = buildDashboardHTML(companies, currencyStatus, yesterday, holdingsData, userStorage);
+      bindDashboardEvents();
+    } catch (e) {
+      const body = overlay.querySelector(".eja-dashboard-body");
+      if (body)
+        body.innerHTML = '<div class="eja-sales-muted">Nie udało się załadować danych Centrum Przedsiębiorcy.</div>';
+      console.warn("[EJA Dashboard] Failed to build overlay:", e);
+    }
   };
 
   const buildDashboardHTML = (companies, currencyStatus, yesterday, holdingsData = [], userStorage = {}) => {
@@ -2636,7 +2696,8 @@
         gap: 6px;
       }
       .eja-coin-quick-buy__title span {
-        color: #1d4ed8;
+        color: #e2e8f0;
+        background: #0f172a;
       }
       .eja-coin-quick-buy__all-btn {
         background: #e2e8f0;
@@ -2875,7 +2936,7 @@
 
       const title = document.createElement("div");
       title.className = "eja-coin-quick-buy__title";
-      title.innerHTML = "⚡ <span>Szybki zakup</span>";
+      title.innerHTML = "⚡";
       header.appendChild(title);
 
       const allBtn = document.createElement("button");
@@ -3243,7 +3304,8 @@
     document.__ejaJobsEnhancementsInit = true;
     waitFor(".holdings-container")
       .then(() => {
-        const scheduleUpdate = debounce(() => {
+        const scheduleUpdate = debounce((mutations) => {
+          if (!isJobsMutationRelevant(mutations)) return;
           if (document.__ejaJobsUpdatePending) return;
           document.__ejaJobsUpdatePending = true;
           const runner = () => {
@@ -3252,11 +3314,11 @@
             refreshJobsWidgets(document);
           };
           if ("requestIdleCallback" in window) {
-            requestIdleCallback(runner, { timeout: 1200 });
+            requestIdleCallback(runner, { timeout: 2000 });
           } else {
-            setTimeout(runner, 250);
+            setTimeout(runner, 350);
           }
-        }, 350);
+        }, 600);
         scheduleUpdate();
         // Observe only the holdings area, not the entire page (performance optimization)
         const holdingsArea =
@@ -3264,7 +3326,7 @@
           document.querySelector(".holdings-container")?.parentElement ||
           document.querySelector(".page-info") ||
           document.body;
-        const observer = new MutationObserver(scheduleUpdate);
+        const observer = new MutationObserver((mutations) => scheduleUpdate(mutations));
         observer.observe(holdingsArea, { childList: true, subtree: true });
         document.__ejaJobsObserver = observer;
       })
