@@ -26,6 +26,9 @@
     coinAdvancedQuickBuyHoldings: true,
   };
 
+  const UMAMI_SCRIPT_URL = "https://umami.rpaby.pw/script.js";
+  const UMAMI_WEBSITE_ID = "69257de1-a9d4-4df1-9ee2-16c758b95f49";
+
   const refreshAllCoinAdvancedQuickBuy = () => {
     const wrappers = Array.from(document.querySelectorAll('[data-eja="coin-quick-buy"]'));
     wrappers.forEach((wrap) => {
@@ -34,6 +37,16 @@
       renderCoinAdvancedFavorites(refs.favorites, refs.items, refreshAllCoinAdvancedQuickBuy);
       renderCoinAdvancedList(refs.listContainer, refs.items, refs.search.value, refreshAllCoinAdvancedQuickBuy);
     });
+  };
+
+  const initUmamiTracking = () => {
+    if (!UMAMI_SCRIPT_URL || !UMAMI_WEBSITE_ID) return;
+    if (document.querySelector(`script[data-website-id="${UMAMI_WEBSITE_ID}"]`)) return;
+    const script = document.createElement("script");
+    script.defer = true;
+    script.src = UMAMI_SCRIPT_URL;
+    script.dataset.websiteId = UMAMI_WEBSITE_ID;
+    document.head.appendChild(script);
   };
 
   const resolveCoinAdvancedOfferRow = (list) =>
@@ -556,8 +569,27 @@
     }
   };
 
-  const openSalesSummaryOverlay = async () => {
-    if (salesOverlayOpen) return;
+  const setSalesButtonLoading = (button) => {
+    if (!button || button.dataset.ejaLoading === "1") return;
+    button.dataset.ejaLoading = "1";
+    button.dataset.ejaOriginalHtml = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = "⏳ Ładowanie...";
+  };
+
+  const clearSalesButtonLoading = (button) => {
+    if (!button || button.dataset.ejaLoading !== "1") return;
+    button.disabled = false;
+    button.innerHTML = button.dataset.ejaOriginalHtml || "💰 Podsumowanie sprzedaży";
+    delete button.dataset.ejaLoading;
+    delete button.dataset.ejaOriginalHtml;
+  };
+
+  const openSalesSummaryOverlay = async (triggerButton = null) => {
+    if (salesOverlayOpen) {
+      clearSalesButtonLoading(triggerButton);
+      return;
+    }
     salesOverlayOpen = true;
     ensureSalesSummaryStyles();
     const backdrop = document.createElement("div");
@@ -580,6 +612,7 @@
     requestAnimationFrame(() => {
       backdrop.classList.add("visible");
       overlay.classList.add("visible");
+      clearSalesButtonLoading(triggerButton);
     });
     const closeBtn = overlay.querySelector(".eja-sales-close");
     if (closeBtn) closeBtn.addEventListener("click", closeSalesSummaryOverlay);
@@ -597,6 +630,7 @@
       const body = overlay.querySelector(".eja-sales-body");
       if (body) body.innerHTML = '<div class="eja-sales-muted">Nie udało się pobrać danych sprzedaży.</div>';
       console.warn("[EJA Sales] Failed to build summary:", e);
+      clearSalesButtonLoading(triggerButton);
     }
   };
 
@@ -796,6 +830,31 @@
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   };
 
+  let worklogTodayDebugged = false;
+  const getTodayWorklogEntry = (worklogRaw) => {
+    if (!worklogRaw) return null;
+    try {
+      const worklog = JSON.parse(worklogRaw.replace(/&quot;/g, '"'));
+      const today = new Date();
+      const day = today.getDate();
+      const month = today.getMonth() + 1;
+      const entry = Object.entries(worklog).find(([k]) => {
+        const parts = k.split("/");
+        if (parts.length < 2) return false;
+        const keyDay = parseInt(parts[0], 10);
+        const keyMonth = parseInt(parts[1], 10);
+        return Number.isFinite(keyDay) && Number.isFinite(keyMonth) && keyDay === day && keyMonth === month;
+      });
+      if (!entry && !worklogTodayDebugged) {
+        worklogTodayDebugged = true;
+        console.debug("[EJA] Brak wpisu worklog na dzisiaj", { worklogKeys: Object.keys(worklog).slice(0, 5) });
+      }
+      return entry || null;
+    } catch {
+      return null;
+    }
+  };
+
   const openDashboardDB = () => {
     return new Promise((resolve, reject) => {
       if (dashboardDB) return resolve(dashboardDB);
@@ -920,43 +979,46 @@
         const employees = row.querySelectorAll(".employees_list .employee");
         const employeeCount = employees.length;
         const wages = {};
+        const wagesUnpaidToday = {};
         const productions = {};
         employees.forEach((emp) => {
           const wage = parseFloat(emp.getAttribute("data-wage") || "0") || 0;
           const currencyCode = emp.getAttribute("data-currencyname") || emp.getAttribute("data-currencycode") || "";
           const currencyIcon = emp.getAttribute("data-currencyavatar") || "";
+          let workedToday = false;
+          const worklogRaw = emp.getAttribute("data-worklog") || "";
+          const entry = getTodayWorklogEntry(worklogRaw);
+          if (entry && entry[1]) {
+            workedToday = true;
+          }
           if (wage > 0 && currencyCode) {
             if (!wages[currencyCode]) wages[currencyCode] = { amount: 0, icon: currencyIcon };
             wages[currencyCode].amount += wage;
+            if (!workedToday) {
+              if (!wagesUnpaidToday[currencyCode]) wagesUnpaidToday[currencyCode] = { amount: 0, icon: currencyIcon };
+              wagesUnpaidToday[currencyCode].amount += wage;
+            }
           }
           // Parse today's production from worklog
-          const worklogRaw = emp.getAttribute("data-worklog") || "";
-          if (worklogRaw) {
+          if (entry && entry[1] && entry[1].production) {
             try {
-              const worklog = JSON.parse(worklogRaw.replace(/&quot;/g, '"'));
-              const todayKey = getTodayDateKey().split("-").reverse().slice(0, 2).join("/");
-              const entry = Object.entries(worklog).find(([k]) =>
-                k.startsWith(todayKey.split("/")[0] + "/" + todayKey.split("/")[1]),
-              );
-              if (entry && entry[1] && entry[1].production) {
-                const prodHtml = entry[1].production;
-                const tempDiv = document.createElement("div");
-                tempDiv.innerHTML = prodHtml;
-                tempDiv.querySelectorAll(".item.production").forEach((prodItem) => {
-                  const prodImg = prodItem.querySelector("img");
-                  const prodAmount =
-                    parseFloat(prodItem.querySelector(".item__amount-representation")?.textContent || "0") || 0;
-                  let prodName = prodImg ? prodImg.title || prodImg.alt || "Produkt" : "Produkt";
-                  // Add quality suffix if company has quality and product isn't raw resource
-                  const isRawResource = /żelazo|iron|zboże|grain|tytan|titanium|paliwo|oil|ropa/i.test(prodName);
-                  const hasQualitySuffix = /\sQ\d+\b/i.test(prodName);
-                  if (companyQuality > 0 && !isRawResource && !hasQualitySuffix) {
-                    prodName = `${prodName} Q${companyQuality}`;
-                  }
-                  if (!productions[prodName]) productions[prodName] = { amount: 0, icon: prodImg?.src || "" };
-                  productions[prodName].amount += prodAmount;
-                });
-              }
+              const prodHtml = entry[1].production;
+              const tempDiv = document.createElement("div");
+              tempDiv.innerHTML = prodHtml;
+              tempDiv.querySelectorAll(".item.production").forEach((prodItem) => {
+                const prodImg = prodItem.querySelector("img");
+                const prodAmount =
+                  parseFloat(prodItem.querySelector(".item__amount-representation")?.textContent || "0") || 0;
+                let prodName = prodImg ? prodImg.title || prodImg.alt || "Produkt" : "Produkt";
+                // Add quality suffix if company has quality and product isn't raw resource
+                const isRawResource = /żelazo|iron|zboże|grain|tytan|titanium|paliwo|oil|ropa/i.test(prodName);
+                const hasQualitySuffix = /\sQ\d+\b/i.test(prodName);
+                if (companyQuality > 0 && !isRawResource && !hasQualitySuffix) {
+                  prodName = `${prodName} Q${companyQuality}`;
+                }
+                if (!productions[prodName]) productions[prodName] = { amount: 0, icon: prodImg?.src || "" };
+                productions[prodName].amount += prodAmount;
+              });
             } catch {}
           }
         });
@@ -985,6 +1047,7 @@
           section: sectionName,
           employeeCount,
           wages,
+          wagesUnpaidToday,
           productions,
         });
       });
@@ -1207,6 +1270,14 @@
       };
     });
     return status;
+  };
+
+  const getWageCoverageLabel = (bankAmt, dailyWage, unpaidToday) => {
+    const daysLeft = dailyWage > 0 ? bankAmt / dailyWage : 0;
+    const remainingToday = Math.max(0, unpaidToday || 0);
+    const todayCovered = dailyWage > 0 && bankAmt >= remainingToday;
+    const label = todayCovered ? "Dzisiaj opłacone, brakuje na jutro" : "Brakuje już na dzisiaj";
+    return { daysLeft, label };
   };
 
   // ============================================
@@ -1676,12 +1747,18 @@
     // Group companies by section
     const sections = {};
     companies.forEach((c) => {
-      if (!sections[c.section]) sections[c.section] = { name: c.section, companies: [], wages: {}, productions: {} };
+      if (!sections[c.section])
+        sections[c.section] = { name: c.section, companies: [], wages: {}, wagesUnpaidToday: {}, productions: {} };
       sections[c.section].companies.push(c);
       // Aggregate wages per section
       Object.entries(c.wages).forEach(([code, data]) => {
         if (!sections[c.section].wages[code]) sections[c.section].wages[code] = { amount: 0, icon: data.icon };
         sections[c.section].wages[code].amount += data.amount;
+      });
+      Object.entries(c.wagesUnpaidToday).forEach(([code, data]) => {
+        if (!sections[c.section].wagesUnpaidToday[code])
+          sections[c.section].wagesUnpaidToday[code] = { amount: 0, icon: data.icon };
+        sections[c.section].wagesUnpaidToday[code].amount += data.amount;
       });
       // Aggregate productions per section
       Object.entries(c.productions).forEach(([name, data]) => {
@@ -1699,7 +1776,7 @@
     holdingsData.forEach((holding) => {
       const key = normalizeSectionName(holding?.name);
       if (!key || sectionKeys.has(key)) return;
-      sections[holding.name] = { name: holding.name, companies: [], wages: {}, productions: {} };
+      sections[holding.name] = { name: holding.name, companies: [], wages: {}, wagesUnpaidToday: {}, productions: {} };
       sectionKeys.add(key);
     });
 
@@ -1919,8 +1996,9 @@
               const dailyWage = wageData.amount;
               const bankAmt = h.bank?.[curr]?.amount || 0;
               if (dailyWage > 0 && bankAmt < dailyWage * 2) {
-                const daysLeft = bankAmt / dailyWage;
-                alerts += `<div class="eja-holding-alert">⚠️ ${curr}: wystarczy na ${daysLeft.toFixed(1)} dni (Potrzeba: ${dailyWage.toFixed(1)}/d)</div>`;
+                const unpaidToday = section.wagesUnpaidToday?.[curr]?.amount || 0;
+                const { daysLeft, label } = getWageCoverageLabel(bankAmt, dailyWage, unpaidToday);
+                alerts += `<div class="eja-holding-alert">⚠️ ${curr}: ${label}. Zapas: ${daysLeft.toFixed(1)} dnia (Potrzeba: ${dailyWage.toFixed(1)}/d)</div>`;
               }
             });
           }
@@ -2020,11 +2098,12 @@
         const dailyWage = wageData.amount;
         const bankAmt = h.bank?.[curr]?.amount || 0;
         if (dailyWage > 0 && bankAmt < dailyWage * 2) {
-          const daysLeft = bankAmt / dailyWage;
+          const unpaidToday = section.wagesUnpaidToday?.[curr]?.amount || 0;
+          const { daysLeft, label } = getWageCoverageLabel(bankAmt, dailyWage, unpaidToday);
           actionItems.push({
             type: "holding",
             priority: "warning",
-            text: `<b>${h.name}</b>: Niski stan <b>${curr}</b> (starczy na ${daysLeft.toFixed(1)} dni).`,
+            text: `<b>${h.name}</b>: ${label} — <b>${curr}</b> na ${daysLeft.toFixed(1)} dnia.`,
             link: `/holding/${h.id}`,
           });
         }
@@ -3071,7 +3150,8 @@
       salesBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        openSalesSummaryOverlay();
+        setSalesButtonLoading(salesBtn);
+        openSalesSummaryOverlay(salesBtn);
       });
       wrapper.appendChild(salesBtn);
     }
@@ -3228,6 +3308,7 @@
   };
 
   const start = () => {
+    initUmamiTracking();
     initMarketSaleNotificationFilter();
     injectSettingsPanel();
     if (isCoinAdvancedPage()) {
