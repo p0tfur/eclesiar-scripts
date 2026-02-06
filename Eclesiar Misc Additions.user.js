@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Eclesiar Misc Additions
 // @namespace http://tampermonkey.net/
-// @version 1.4.5
+// @version 1.4.6
 // @description Fixed mission indicator, improved UX for energy and food indicators, added auto language detection and Polish translation, added EQ presets to build/mine views
 // @author p0tfur, based on script by ms05 + SirManiek
 // @match https://eclesiar.com/*
@@ -502,10 +502,98 @@ const CEDRU_VERSION = true;
       const atkLab = "ATK";
       const defLab = "DEF";
       const nextHtml = `<span class="lab">${atkLab}:</span> ${fmtNet(
-        effects.attackers
+        effects.attackers,
       )}&nbsp;&nbsp;<span class="lab">${defLab}:</span> ${fmtNet(effects.defenders)}`;
       if (box.innerHTML !== nextHtml) box.innerHTML = nextHtml;
     } catch {}
+  }
+
+  const WAR_ROUND_FINISHED_KEYWORDS = ["zwycięzca", "przegrany", "winner", "defeated"];
+  const WAR_ROUND_FINISHED_LABEL = "RUNDA ZAKOŃCZONA";
+
+  function normalizeWarText(str) {
+    try {
+      return String(str || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim();
+    } catch {
+      return String(str || "")
+        .toLowerCase()
+        .trim();
+    }
+  }
+
+  function addWarRoundFinishedStyles() {
+    try {
+      if (document.getElementById("ec-war-round-finished-style")) return;
+      const style = document.createElement("style");
+      style.id = "ec-war-round-finished-style";
+      style.textContent = `
+        .fight-button.ec-round-finished {
+          cursor: not-allowed !important;
+          filter: grayscale(0.45) brightness(0.85);
+        }
+        .fight-button.ec-round-finished p {
+          color: #f1f5f9 !important;
+          font-weight: 700 !important;
+          letter-spacing: 0.5px;
+        }
+      `;
+      document.head.appendChild(style);
+    } catch {}
+  }
+
+  function isWarRoundFinished() {
+    try {
+      const markers = [
+        document.querySelector("#pointsMissing-defender"),
+        document.querySelector("#pointsMissing-attacker"),
+        document.querySelector(".war-content-area__content--right p"),
+        document.querySelector(".war-content-area__content--left p"),
+      ].filter(Boolean);
+      if (!markers.length) return false;
+      return markers.some((el) => {
+        const text = normalizeWarText(el.textContent);
+        if (!text) return false;
+        return WAR_ROUND_FINISHED_KEYWORDS.some((kw) => text.includes(kw));
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  function updateFightButtonsFinishedState(finished) {
+    try {
+      const buttons = document.querySelectorAll(".fight-button");
+      if (!buttons.length) return;
+      buttons.forEach((btn) => {
+        const labelEl = btn.querySelector("p");
+        if (!labelEl) return;
+        const orig = btn.dataset.ecOrigFightLabel;
+        if (!orig) {
+          btn.dataset.ecOrigFightLabel = (labelEl.textContent || "Walcz").trim();
+        }
+        const desired = finished ? WAR_ROUND_FINISHED_LABEL : btn.dataset.ecOrigFightLabel;
+        if (desired && labelEl.textContent !== desired) {
+          labelEl.textContent = desired;
+        }
+        if (finished) btn.classList.add("ec-round-finished");
+        else btn.classList.remove("ec-round-finished");
+      });
+    } catch {}
+  }
+
+  function ensureWarRoundButtonState() {
+    try {
+      if (!/^\/war\/[0-9]+(?:\/|$)/.test(location.pathname)) return;
+      const finished = isWarRoundFinished();
+      addWarRoundFinishedStyles();
+      updateFightButtonsFinishedState(finished);
+    } catch (e) {
+      warn("Failed to update war fight button state: " + e);
+    }
   }
 
   function observeWarPage() {
@@ -514,10 +602,12 @@ const CEDRU_VERSION = true;
       const target = document.body || document.documentElement || document;
       const onMut = debounce(() => {
         ensureWarEffectsSummary();
+        ensureWarRoundButtonState();
       }, 200);
       const obs = new MutationObserver(onMut);
       obs.observe(target, { childList: true, subtree: true, characterData: true });
       ensureWarEffectsSummary();
+      ensureWarRoundButtonState();
     } catch {}
   }
 
@@ -727,7 +817,7 @@ const CEDRU_VERSION = true;
             applyPreset(num, buildId);
           } catch {}
         },
-        true
+        true,
       );
       window.__ecPresetDelegationInstalled = true;
     } catch {}
@@ -872,7 +962,7 @@ const CEDRU_VERSION = true;
 
       // 3) Premium finances: Złoto/Gold cue
       const goldText = norm(
-        document.querySelector(".premium-finances .text")?.textContent || document.body.textContent || ""
+        document.querySelector(".premium-finances .text")?.textContent || document.body.textContent || "",
       );
       if (goldText.includes("złoto")) score.pl += 2;
       if (goldText.includes("gold")) score.en += 2;
@@ -1484,7 +1574,7 @@ const CEDRU_VERSION = true;
           buttons.sort(
             (a, b) =>
               Number((a.getAttribute("data-build") || "0").replace(/\s+/g, "")) -
-              Number((b.getAttribute("data-build") || "0").replace(/\s+/g, ""))
+              Number((b.getAttribute("data-build") || "0").replace(/\s+/g, "")),
           );
           buttons.forEach((b) => {
             const numRaw = b.getAttribute("data-build") || "";
@@ -1506,7 +1596,7 @@ const CEDRU_VERSION = true;
             try {
               btn.setAttribute(
                 "onclick",
-                'window.ecApplyPreset && window.ecApplyPreset(this.getAttribute("data-build"), this.getAttribute("data-buildid"))'
+                'window.ecApplyPreset && window.ecApplyPreset(this.getAttribute("data-build"), this.getAttribute("data-buildid"))',
               );
             } catch {}
             toolbar.appendChild(btn);
@@ -1910,14 +2000,14 @@ const CEDRU_VERSION = true;
         if (energySpan) {
           const newEnergyTimeFull = new Date(energyEndAtMs);
           const nextText = `${TRANSLATIONS[LANGUAGE]?.energyShort || ""} ${formatCompactDate(
-            newEnergyTimeFull
+            newEnergyTimeFull,
           )} (${formatRelative(newEnergyTimeFull)})`;
           if (energySpan.textContent !== nextText) energySpan.textContent = nextText;
         }
         if (foodSpan) {
           const newFoodTimeFull = new Date(foodEndAtMs);
           const nextText = `${TRANSLATIONS[LANGUAGE]?.foodShort || ""} ${formatCompactDate(
-            newFoodTimeFull
+            newFoodTimeFull,
           )} (${formatRelative(newFoodTimeFull)})`;
           if (foodSpan.textContent !== nextText) foodSpan.textContent = nextText;
         }
@@ -1936,7 +2026,7 @@ const CEDRU_VERSION = true;
         const fullTimeSpan = document.createElement("span");
         fullTimeSpan.className = `ec-full-time ${classForPct(energyPct)}`;
         fullTimeSpan.textContent = `${TRANSLATIONS[LANGUAGE]?.energyShort || ""} ${formatCompactDate(
-          energyTimeFull
+          energyTimeFull,
         )} (${formatRelative(energyTimeFull)})`;
 
         energyValue.appendChild(fullTimeSpan);
@@ -1955,7 +2045,7 @@ const CEDRU_VERSION = true;
         const fullTimeSpan = document.createElement("span");
         fullTimeSpan.className = `ec-full-time ${classForPct(foodPct)}`;
         fullTimeSpan.textContent = `${TRANSLATIONS[LANGUAGE]?.foodShort || ""} ${formatCompactDate(
-          foodTimeFull
+          foodTimeFull,
         )} (${formatRelative(foodTimeFull)})`;
 
         foodValue.appendChild(fullTimeSpan);
@@ -2006,13 +2096,13 @@ const CEDRU_VERSION = true;
 
         if (energySpan) {
           const nextText = `${TRANSLATIONS[LANGUAGE]?.energyShort || ""} ${fmtFixedTime(
-            energyEndAtMs
+            energyEndAtMs,
           )} (${fmtRelFromSec(energyLeftSec)})`;
           if (energySpan.textContent !== nextText) energySpan.textContent = nextText;
         }
         if (foodSpan) {
           const nextText = `${TRANSLATIONS[LANGUAGE]?.foodShort || ""} ${fmtFixedTime(foodEndAtMs)} (${fmtRelFromSec(
-            foodLeftSec
+            foodLeftSec,
           )})`;
           if (foodSpan.textContent !== nextText) foodSpan.textContent = nextText;
         }
