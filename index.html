@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pl">
   <head>
     <meta charset="UTF-8" />
@@ -34,8 +34,13 @@
         backdrop-filter: blur(10px);
         border: 2px solid rgba(139, 69, 19, 0.5);
         border-radius: 16px;
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
-        transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+        box-shadow:
+          0 20px 25px -5px rgba(0, 0, 0, 0.5),
+          0 10px 10px -5px rgba(0, 0, 0, 0.3);
+        transition:
+          transform 0.3s ease,
+          box-shadow 0.3s ease,
+          border-color 0.3s ease;
       }
       .script-card:hover {
         transform: translateY(-5px);
@@ -53,7 +58,9 @@
         box-shadow: 0 0 15px rgba(139, 69, 19, 0.6);
       }
       .gothic-text {
-        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), 0 0 10px rgba(139, 69, 19, 0.5);
+        text-shadow:
+          2px 2px 4px rgba(0, 0, 0, 0.8),
+          0 0 10px rgba(139, 69, 19, 0.5);
         font-family: "Georgia", serif;
       }
       .script-card h3 {
@@ -170,7 +177,7 @@
       <header
         class="text-center mb-12 gothic-card p-4 relative"
         style="
-          background-image: url('witamy.jpeg');
+          background-image: url(&quot;witamy.jpeg&quot;);
           background-size: auto;
           background-position: center;
           background-repeat: no-repeat;
@@ -320,7 +327,7 @@
             </div>
             <h3 class="text-xl font-bold text-gray-800 mb-2">Misc Additions</h3>
             <span class="inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full font-medium">
-              v1.4.5
+              v1.4.6
             </span>
           </div>
           <p class="text-gray-600 mb-2 text-sm leading-relaxed">
@@ -346,6 +353,15 @@
               <span class="label-open">Ukryj changelog</span>
             </summary>
             <div class="mt-2 text-sm text-white/90">
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.4.6</li>
+                <ul class="space-y-2 text-sm">
+                  <li>
+                    <span class="ico">+</span>w bitwach wykrywa zakończoną rundę (Zwycięzca/Przegrany lub
+                    Winner/Defeated) i zamienia napis przycisku na <strong>RUNDA ZAKOŃCZONA</strong>
+                  </li>
+                </ul>
+              </ul>
               <ul class="space-y-2 text-sm">
                 <li class="text-center">1.4.5</li>
                 <ul class="space-y-2 text-sm">
@@ -530,29 +546,59 @@
               <ul class="space-y-2 text-sm">
                 <li class="text-center">1.4.0</li>
                 <ul class="space-y-2 text-sm">
-                  <li><span class="ico">+</span> panel do włączania/wyłączania każdej istniejącej funkcji, według preferencji, w Ustawieniach gry.</li>
-                  <li><span class="ico">+</span> łatwe kupowanie waluty dla holdingów na rynku walutowym: dodawaj holdingi do ulubionych, lub wyszukuj na liście.</li>
+                  <li>
+                    <span class="ico">+</span> panel do włączania/wyłączania każdej istniejącej funkcji, według
+                    preferencji, w Ustawieniach gry.
+                  </li>
+                  <li>
+                    <span class="ico">+</span> łatwe kupowanie waluty dla holdingów na rynku walutowym: dodawaj holdingi
+                    do ulubionych, lub wyszukuj na liście.
+                  </li>
                   <li><span class="ico">+</span> centrum przedsiębiorcy: pokazywanie również holdingów bez firm.</li>
-                  <li><span class="ico">+</span> centrum przedsiębiorcy: jasne powiadomienie czy waluty brakuje już na dziś, czy od jutra.</li>
+                  <li>
+                    <span class="ico">+</span> centrum przedsiębiorcy: jasne powiadomienie czy waluty brakuje już na
+                    dziś, czy od jutra.
+                  </li>
                   <li><span class="ico">+</span> firmy: dodano podsumowanie dziennego zysku ze sprzedaży.</li>
                   <li><span class="ico">+</span> ukrywanie powiadomień o sprzedaży na rynku.</li>
-               </ul>
+                </ul>
               </ul>
               <ul class="space-y-2 text-sm">
                 <li class="text-center">1.3.8</li>
                 <ul class="space-y-2 text-sm">
-                  <li><span class="ico">+</span> <b>połączony Dashboard:</b> Jedna karta na każdy Holding ze wszystkimi informacjami (Pracownicy, Produkcja, Bank, Magazyn)</li>
-                  <li><span class="ico">+</span> <b>fix Magazynu Holdingu:</b> Poprawne wyświetlanie stanów magazynowych dla wszystkich holdingów (fix parsowania)</li>
-                  <li><span class="ico">+</span> <b>dwujęzyczność:</b> obsługujemy polską i ang. wesję gry ALE wyświetlamy info tylko po Polsku</li>
-                  <li><span class="ico">+</span> <b>ulepszenia Magazynu:</b> Rozdzielenie jakości itemów (np. osobno Broń Q4 i Q5), wskaźnik wolnego miejsca z kolorami</li>
-                  <li><span class="ico">+</span> <b>produkcja:</b> Pokaywanie potencjału produkcyjnego (Capacity) zamiast tylko dzisiejszego urobku</li>
+                  <li>
+                    <span class="ico">+</span> <b>połączony Dashboard:</b> Jedna karta na każdy Holding ze wszystkimi
+                    informacjami (Pracownicy, Produkcja, Bank, Magazyn)
+                  </li>
+                  <li>
+                    <span class="ico">+</span> <b>fix Magazynu Holdingu:</b> Poprawne wyświetlanie stanów magazynowych
+                    dla wszystkich holdingów (fix parsowania)
+                  </li>
+                  <li>
+                    <span class="ico">+</span> <b>dwujęzyczność:</b> obsługujemy polską i ang. wesję gry ALE wyświetlamy
+                    info tylko po Polsku
+                  </li>
+                  <li>
+                    <span class="ico">+</span> <b>ulepszenia Magazynu:</b> Rozdzielenie jakości itemów (np. osobno Broń
+                    Q4 i Q5), wskaźnik wolnego miejsca z kolorami
+                  </li>
+                  <li>
+                    <span class="ico">+</span> <b>produkcja:</b> Pokaywanie potencjału produkcyjnego (Capacity) zamiast
+                    tylko dzisiejszego urobku
+                  </li>
                 </ul>
               </ul>
               <ul class="space-y-2 text-sm">
                 <li class="text-center">1.3.6</li>
                 <ul class="space-y-2 text-sm">
-                  <li><span class="ico">+</span> na samej górze "AKCJE" więc od razu widzisz tam że pracownik odszedł czy brak waluty bez przeglądania wszystkiego</li>
-                  <li><span class="ico">+</span> podział na sektor państwowy/prywatny dla tych co zarządzają Państwowymi spółkami</li>
+                  <li>
+                    <span class="ico">+</span> na samej górze "AKCJE" więc od razu widzisz tam że pracownik odszedł czy
+                    brak waluty bez przeglądania wszystkiego
+                  </li>
+                  <li>
+                    <span class="ico">+</span> podział na sektor państwowy/prywatny dla tych co zarządzają Państwowymi
+                    spółkami
+                  </li>
                 </ul>
               </ul>
               <ul class="space-y-2 text-sm">
@@ -564,12 +610,21 @@
               <ul class="space-y-2 text-sm">
                 <li class="text-center">1.3.2</li>
                 <ul class="space-y-2 text-sm">
-                  <li><span class="ico">FIX</span> holdingi przestały się wyświetlać w menu "Moje miejsca" -> naprawione</li>
-                  <li><span class="ico">+</span> Nowa rzecz: "Podsumowanie dzienne" było brzydkie i nie spełniało założeń więc wylatuje. Zastępuje je "Centrum Przedsiębiorcy"</li>
-                  <li><span class="ico">+</span> ogólne podsumowanie produkcji i kosztów ze wszystkich firm i holdingów</li>
-                  <li><span class="ico">+</span> waluty per user i holding -> z ostrzeżeniem jak masz mało żebyś dokupił</li>
+                  <li>
+                    <span class="ico">FIX</span> holdingi przestały się wyświetlać w menu "Moje miejsca" -> naprawione
+                  </li>
+                  <li>
+                    <span class="ico">+</span> Nowa rzecz: "Podsumowanie dzienne" było brzydkie i nie spełniało założeń
+                    więc wylatuje. Zastępuje je "Centrum Przedsiębiorcy"
+                  </li>
+                  <li>
+                    <span class="ico">+</span> ogólne podsumowanie produkcji i kosztów ze wszystkich firm i holdingów
+                  </li>
+                  <li>
+                    <span class="ico">+</span> waluty per user i holding -> z ostrzeżeniem jak masz mało żebyś dokupił
+                  </li>
                   <li><span class="ico">+</span> info że ktoś odszedł</li>
-- wszystko widać na zrzutach -> u Was oczywiście bez cenzury :D
+                  - wszystko widać na zrzutach -> u Was oczywiście bez cenzury :D
                   <li><span class="ico">+</span> skrypt działa również na Apollo</li>
                 </ul>
               </ul>
@@ -724,15 +779,14 @@
             <div class="w-16 h-16 bg-indigo-500 rounded-full flex items-center justify-center mx-auto mb-3">
               <span class="text-2xl">👷</span>
             </div>
-            <h3 class="text-xl font-bold text-gray-800 mb-2">Export NPC Workers</h3>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Export Country NPC Workers</h3>
             <span class="inline-block bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded-full font-medium">
               v1.0.0
             </span>
           </div>
           <p class="text-gray-600 mb-4 text-sm leading-relaxed">
-            Eksportuje NPC zatrudnionych w firmach z kraju (region, pracownicy, pensje, lokacje). Panel UI pojawia się na
-            stronie kraju np: <code>https://eclesiar.com/country/*</code>. Automatycznie pobiera dane ze wszystkich firm w
-            kraju i generuje plik CSV z pełnymi informacjami o pracownikach NPC.
+            Eksportuje NPC zatrudnionych w firmach państwowych-publicznych (region, pracownicy, pensje, lokacje). Panel
+            UI pojawia się na stronie kraju np: <code>https://eclesiar.com/country/*</code>.
           </p>
           <a
             href="https://24na7.info/eclesiar-scripts/Eclesiar_NPC_Workers_Export.user.js"
@@ -758,6 +812,52 @@
                   <li><span class="ico">+</span> pierwsze wydanie - eksport NPC z firm w kraju</li>
                   <li><span class="ico">+</span> automatyczne pobieranie danych z firm</li>
                   <li><span class="ico">+</span> eksport do CSV z pełnymi informacjami</li>
+                </ul>
+              </ul>
+            </div>
+          </details>
+        </div>
+
+        <!-- Export Region NPCs to CSV -->
+        <div class="script-card p-6">
+          <div class="text-center mb-4">
+            <div class="w-16 h-16 bg-orange-500 rounded-full flex items-center justify-center mx-auto mb-3">
+              <span class="text-2xl">🌍</span>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Export Region NPCs</h3>
+            <span class="inline-block bg-orange-100 text-orange-800 text-xs px-2 py-1 rounded-full font-medium">
+              v1.0.0
+            </span>
+          </div>
+          <p class="text-gray-600 mb-4 text-sm leading-relaxed">
+            Przechodzi po wszystkich regionach kraju i pobiera listę NPC wraz z firmami, wynagrodzeniami i linkami. UI
+            pojawia się automatycznie na stronie kraju (<code>https://eclesiar.com/country/*</code>) i pozwala w jednym
+            kliknięciu wyeksportować komplet danych do CSV z podziałem na regiony.
+          </p>
+          <a
+            href="https://24na7.info/eclesiar-scripts/Eclesiar_Region_NPC_Export.user.js"
+            class="download-btn text-white font-medium py-2 px-4 rounded-lg block text-center text-sm"
+          >
+            📥 Pobierz skrypt
+          </a>
+          <div class="chip-row">
+            <span class="chip"><span class="ico">🌐</span>Regiony kraju</span>
+            <span class="chip"><span class="ico">👤</span>NPC + firmy</span>
+            <span class="chip"><span class="ico">📄</span>CSV-ready</span>
+          </div>
+          <details class="changelog">
+            <summary>
+              <span class="disclosure-chevron">▶</span>
+              <span class="label-closed">Pokaż changelog</span>
+              <span class="label-open">Ukryj changelog</span>
+            </summary>
+            <div class="mt-2 text-sm text-white/90">
+              <ul class="space-y-2 text-sm">
+                <li class="text-center">1.0.0</li>
+                <ul class="space-y-2 text-sm">
+                  <li><span class="ico">+</span> pierwsze wydanie - eksport NPC z regionów kraju</li>
+                  <li><span class="ico">+</span> automatyczne przechodzenie przez wszystkie regiony</li>
+                  <li><span class="ico">+</span> CSV z ID kraju/regionu, linkami NPC i firm</li>
                 </ul>
               </ul>
             </div>

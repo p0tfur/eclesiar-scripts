@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Eclesiar Janueszex Assistant by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.4.1
+// @version      1.4.2
 // @description  Janueszex Assistant
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -97,7 +97,8 @@
   const SALES_STORE_NAME = "daily_sales";
   const SALES_HISTORY_DAYS = 7;
   const SALES_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
-  const SALES_CACHE_VERSION = "v2";
+  const SALES_CACHE_VERSION = "v4";
+  const TRANSACTIONS_ALL_FILTER = "all";
   let salesDB = null;
   let salesOverlayOpen = false;
 
@@ -109,15 +110,14 @@
     }
   };
 
-  const SALES_FILTER_USER = 2;
-  const SALES_FILTER_HOLDING = 6;
+  /* REMOVED CONSTANTS: SALES_FILTER_USER, SALES_FILTER_HOLDING - now resolved dynamically */
 
   const getSalesSummaryDateKeys = () =>
     Array.from({ length: SALES_HISTORY_DAYS }, (_, index) => getDateKeyDaysAgo(index));
 
   const formatSalesDateLabel = (dateKey) => {
-    if (dateKey === getTodayDateKey()) return "Dzisiaj";
-    if (dateKey === getDateKeyDaysAgo(1)) return "Wczoraj";
+    if (dateKey === getTodayDateKey()) return USER_LANG === "pl" ? "Dzisiaj" : "Today";
+    if (dateKey === getDateKeyDaysAgo(1)) return USER_LANG === "pl" ? "Wczoraj" : "Yesterday";
     return dateKey.split("-").reverse().join(".");
   };
 
@@ -125,9 +125,17 @@
     if (!rawText) return null;
     const text = String(rawText).trim().toLowerCase();
     if (!text) return null;
-    if (text.includes("wczoraj")) return getDateKeyDaysAgo(1);
-    if (text.includes("dzisiaj") || text.includes("dziś")) return getTodayDateKey();
-    if (text.includes("godzin") || text.includes("minut") || text.includes("sekund")) return getTodayDateKey();
+    if (text.includes("wczoraj") || text.includes("yesterday")) return getDateKeyDaysAgo(1);
+    if (text.includes("dzisiaj") || text.includes("dziś") || text.includes("today")) return getTodayDateKey();
+    if (
+      text.includes("godzin") ||
+      text.includes("hour") ||
+      text.includes("minut") ||
+      text.includes("minute") ||
+      text.includes("sekund") ||
+      text.includes("second")
+    )
+      return getTodayDateKey();
     const match = text.match(/(\d{2})[./-](\d{2})[./-](\d{4})/);
     if (match) return `${match[3]}-${match[2]}-${match[1]}`;
     return null;
@@ -198,7 +206,7 @@
     if (!node || !(node instanceof HTMLElement)) return false;
     if (!node.classList.contains("notification-popup")) return false;
     const title = node.querySelector("h3")?.textContent || "";
-    return /Przedmioty sprzedane na rynku/i.test(title);
+    return /Przedmioty sprzedane na rynku|Items sold in the market/i.test(title);
   };
 
   const closeMarketSaleNotification = (node) => {
@@ -256,20 +264,24 @@
 
   const buildSalesCacheKey = (entity, dateKey) => `sales:${SALES_CACHE_VERSION}:${entity.type}:${entity.id}:${dateKey}`;
 
-  const buildTransactionsUrlCandidates = (entity, page) => {
+  const buildTransactionsUrlCandidates = (entity, page, filterId) => {
     const pageNum = page || 1;
+    // filterId must be resolved from the select list.
+    if (!filterId) return [];
+    const fid = filterId;
+
     if (entity.type === "holding") {
-      const base = `/holding/${entity.id}/transactions/${SALES_FILTER_HOLDING}`;
+      const base = `/holding/${entity.id}/transactions/${fid}`;
       if (pageNum > 1) return [`${base}/${pageNum}`];
       return [base];
     }
-    const base = `/user/transactions/${SALES_FILTER_USER}`;
+    const base = `/user/transactions/${fid}`;
     if (pageNum > 1) return [`${base}/${pageNum}`];
     return [base];
   };
 
-  const fetchTransactionsDocument = async (entity, page) => {
-    const candidates = buildTransactionsUrlCandidates(entity, page);
+  const fetchTransactionsDocument = async (entity, page, filterId) => {
+    const candidates = buildTransactionsUrlCandidates(entity, page, filterId);
     for (const url of candidates) {
       try {
         const response = await fetch(url, { credentials: "include" });
@@ -288,7 +300,37 @@
   const isMarketSaleRow = (row) => {
     const descCell = row.querySelector(".column-4") || row.querySelector("td:nth-child(5)");
     const text = descCell ? descCell.textContent || "" : "";
-    return /Przedmioty kupione na rynku/i.test(text);
+    return /Przedmioty kupione na rynku|Items bought in the market/i.test(text);
+  };
+
+  const resolveMarketFilterId = async (entity) => {
+    const doc = await fetchTransactionsDocument(entity, 1, TRANSACTIONS_ALL_FILTER);
+    if (!doc) {
+      console.warn("[EJA] Could not load transaction page to resolve filter ID.");
+      return null;
+    }
+
+    const select = doc.querySelector("select#description-filter");
+    if (!select) {
+      console.warn("[EJA] Filter select not found.");
+      return null;
+    }
+
+    // Look for option text
+    // "Przedmioty kupione na rynku" OR "Items bought in the market"
+    const options = Array.from(select.options);
+
+    const targetOption = options.find((opt) =>
+      /Przedmioty kupione na rynku|Items bought in the market/i.test(opt.textContent),
+    );
+
+    if (targetOption) {
+      console.log(`[EJA] Resolved dynamic filter ID for ${entity.name}: ${targetOption.value}`);
+      return targetOption.value;
+    }
+
+    console.warn(`[EJA] Could not find 'Market' filter option for ${entity.name}. Skipping summary.`);
+    return null;
   };
 
   const normalizeEntityLabel = (value) => (value || "").trim().toLowerCase();
@@ -319,13 +361,17 @@
     dateKeys.forEach((key) => {
       summary[key] = { totals: {}, count: 0 };
     });
+
+    const filterId = await resolveMarketFilterId(entity);
+    if (!filterId) return summary;
+
     const oldestKey = dateKeys[dateKeys.length - 1];
     let page = 1;
     let keepFetching = true;
 
     while (keepFetching && page <= 200) {
       if (!salesOverlayOpen) break;
-      const doc = await fetchTransactionsDocument(entity, page);
+      const doc = await fetchTransactionsDocument(entity, page, filterId);
       if (!doc) break;
       const rows = Array.from(doc.querySelectorAll("table.table tbody tr"));
       if (!rows.length) break;
@@ -400,7 +446,7 @@
   const resolveUserEntity = async () => {
     const initial = resolveUserIdentityFromDocument(document);
     if (initial.id) return { type: "user", id: initial.id, name: initial.name };
-    const doc = await fetchTransactionsDocument({ type: "user" }, 1);
+    const doc = await fetchTransactionsDocument({ type: "user" }, 1, TRANSACTIONS_ALL_FILTER);
     const resolved = resolveUserIdentityFromDocument(doc);
     return { type: "user", id: resolved.id, name: resolved.name };
   };
