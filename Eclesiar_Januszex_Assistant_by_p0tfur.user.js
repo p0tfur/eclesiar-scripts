@@ -1,7 +1,7 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         Eclesiar Janueszex Assistant by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.4.2
+// @version      1.5.1
 // @description  Janueszex Assistant
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -26,9 +26,6 @@
     coinAdvancedQuickBuyHoldings: true,
   };
 
-  const UMAMI_SCRIPT_URL = "https://umami.rpaby.pw/script.js";
-  const UMAMI_WEBSITE_ID = "69257de1-a9d4-4df1-9ee2-16c758b95f49";
-
   const refreshAllCoinAdvancedQuickBuy = () => {
     const wrappers = Array.from(document.querySelectorAll('[data-eja="coin-quick-buy"]'));
     wrappers.forEach((wrap) => {
@@ -51,16 +48,6 @@
         (node) => node.nodeType === 1 && (node.matches?.(selectors) || node.querySelector?.(selectors)),
       );
     });
-  };
-
-  const initUmamiTracking = () => {
-    if (!UMAMI_SCRIPT_URL || !UMAMI_WEBSITE_ID) return;
-    if (document.querySelector(`script[data-website-id="${UMAMI_WEBSITE_ID}"]`)) return;
-    const script = document.createElement("script");
-    script.defer = true;
-    script.src = UMAMI_SCRIPT_URL;
-    script.dataset.websiteId = UMAMI_WEBSITE_ID;
-    document.head.appendChild(script);
   };
 
   const resolveCoinAdvancedOfferRow = (list) =>
@@ -779,6 +766,39 @@
     return Boolean(settings[key]);
   };
 
+  const ACTION_ITEMS_STATE_KEY = "eja_action_items_state_v1";
+
+  const loadActionItemsState = () => {
+    try {
+      const raw = localStorage.getItem(ACTION_ITEMS_STATE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (e) {
+      console.warn("[EJA] Failed to load action items state:", e);
+      return {};
+    }
+  };
+
+  const saveActionItemsState = (state) => {
+    try {
+      localStorage.setItem(ACTION_ITEMS_STATE_KEY, JSON.stringify(state || {}));
+    } catch (e) {
+      console.warn("[EJA] Failed to save action items state:", e);
+    }
+  };
+
+  const setActionItemDone = (actionId, done) => {
+    if (!actionId) return;
+    const current = loadActionItemsState();
+    if (done) {
+      current[actionId] = { doneAt: Date.now() };
+    } else {
+      delete current[actionId];
+    }
+    saveActionItemsState(current);
+  };
+
   // RAW Consumption Consts
   const RAW_CONSUMPTION_RATES = {
     1: 37,
@@ -790,24 +810,81 @@
 
   const COMPANY_TYPE_TO_RAW = {
     "Fabryka broni": "Żelazo",
-    "Weapon Factory": "Iron",
+    "Weapons Factory": "Iron",
     "Fabryka samolotów": "Tytan",
-    "Aircraft Factory": "Titanium",
-    "Fabryka chleba": "Zboże",
+    "Aerial Weapon Factory": "Titanium",
+    "Piekarnia": "Zboże",
     "Food Factory": "Grain",
-    Piekarnia: "Zboże",
-    Bakery: "Grain",
+    "Airlines Company": "Oil",
+    "Fabryka biletów lotniczych": "Paliwo"
   };
+  const normalizeLookupKey = (value) => {
+    const text = value == null ? "" : String(value);
+    const normalized = typeof text.normalize === "function" ? text.normalize("NFKD") : text;
+    return normalized
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  };
+
+  const COMPANY_TYPE_RAW_ALIASES = {
+    "weapon factory": "Iron",
+    "weapons factory": "Iron",
+    "fabryka broni": "Żelazo",
+    "aircraft factory": "Titanium",
+    "aerial weapon factory": "Titanium",
+    "aerial weapons factory": "Titanium",
+    "fabryka samolotow": "Tytan",
+    "food factory": "Grain",
+    bakery: "Grain",
+    piekarnia: "Zboże",
+    "airline company": "Oil",
+    "airlines company": "Oil",
+    "fabryka biletow lotniczych": "Paliwo",
+  };
+
+  const COMPANY_TYPE_TO_RAW_NORMALIZED = Object.entries(COMPANY_TYPE_TO_RAW).reduce(
+    (acc, [type, raw]) => {
+      const normalizedType = normalizeLookupKey(type);
+      if (normalizedType) acc[normalizedType] = raw;
+      return acc;
+    },
+    { ...COMPANY_TYPE_RAW_ALIASES },
+  );
+
+  const getRawForCompanyType = (companyType) => {
+    const normalizedType = normalizeLookupKey(companyType);
+    if (!normalizedType) return null;
+    return COMPANY_TYPE_TO_RAW_NORMALIZED[normalizedType] || null;
+  };
+
+  const normalizeSectionName = (name) => normalizeLookupKey(name);
+
+  const isPersonalSectionName = (name) => {
+    const normalized = normalizeSectionName(name);
+    return (
+      normalized === "moje firmy" ||
+      normalized === "my companies" ||
+      normalized === "own companies" ||
+      normalized === "sektor prywatny" ||
+      normalized === "private sector"
+    );
+  };
+
   // Helper to map known raw names to unified Keys
   const UNIFIED_RAW_NAMES = {
     Żelazo: "Żelazo",
+    Zelazo: "Żelazo",
     Iron: "Żelazo",
     Tytan: "Tytan",
     Titanium: "Tytan",
     Zboże: "Zboże",
+    Zboze: "Zboże",
     Grain: "Zboże",
     Paliwo: "Paliwo",
     Fuel: "Paliwo",
+    Oil: "Paliwo",
   };
 
   const RAW_ID_MAP = {
@@ -817,9 +894,62 @@
     13: "Paliwo",
   };
 
+  // Product ids (provided by game mapping / user notes)
+  const PRODUCT_ID_TO_NAME = {
+    // Aircraft Q1-Q5
+    2: "Samolot",
+    3: "Samolot",
+    4: "Samolot",
+    5: "Samolot",
+    6: "Samolot",
+    // Ticket Q1-Q5
+    8: "Bilet",
+    9: "Bilet",
+    10: "Bilet",
+    11: "Bilet",
+    12: "Bilet",
+    // Weapon Q1-Q5
+    14: "Broń",
+    15: "Broń",
+    16: "Broń",
+    17: "Broń",
+    18: "Broń",
+    // Food/Bread Q1-Q5
+    20: "Jedzenie",
+    21: "Jedzenie",
+    22: "Jedzenie",
+    23: "Jedzenie",
+    24: "Jedzenie",
+  };
+
   const USER_LANG = localStorage.getItem("ecPlus.language") === "pl" ? "pl" : "en";
-  const PRODUCT_TRANSLATIONS = {
-    // PL -> EN
+  const PRODUCT_CANONICAL_PL = {
+    zelazo: "Żelazo",
+    żelazo: "Żelazo",
+    iron: "Żelazo",
+    tytan: "Tytan",
+    titanium: "Tytan",
+    zboze: "Zboże",
+    zboże: "Zboże",
+    grain: "Zboże",
+    paliwo: "Paliwo",
+    fuel: "Paliwo",
+    oil: "Paliwo",
+    ropa: "Paliwo",
+    bron: "Broń",
+    broń: "Broń",
+    weapon: "Broń",
+    samolot: "Samolot",
+    aircraft: "Samolot",
+    chleb: "Chleb",
+    bread: "Chleb",
+    bilet: "Bilet",
+    ticket: "Bilet",
+    jedzenie: "Jedzenie",
+    food: "Jedzenie",
+  };
+
+  const PRODUCT_PL_TO_EN = {
     Żelazo: "Iron",
     Tytan: "Titanium",
     Zboże: "Grain",
@@ -829,66 +959,45 @@
     Chleb: "Bread",
     Bilet: "Ticket",
     Jedzenie: "Food",
-    // EN -> PL
-    Iron: "Żelazo",
-    Titanium: "Tytan",
-    Grain: "Zboże",
-    Fuel: "Paliwo",
-    Weapon: "Broń",
-    Aircraft: "Samolot",
-    Bread: "Chleb",
-    Ticket: "Bilet",
-    Food: "Jedzenie",
   };
 
+  const RAW_STOCK_NAME_ALIASES = {
+    "Żelazo": ["Żelazo", "Zelazo", "Iron"],
+    Tytan: ["Tytan", "Titanium"],
+    "Zboże": ["Zboże", "Zboze", "Grain"],
+    Paliwo: ["Paliwo", "Fuel", "Oil", "Ropa"],
+  };
+
+  const getRawStockCandidates = (rawName) => {
+    const canonicalPl = PRODUCT_CANONICAL_PL[normalizeLookupKey(rawName)] || rawName;
+    const localized = USER_LANG === "en" ? PRODUCT_PL_TO_EN[canonicalPl] || canonicalPl : canonicalPl;
+    const aliases = RAW_STOCK_NAME_ALIASES[canonicalPl] || [canonicalPl];
+    const all = [rawName, canonicalPl, localized, ...aliases].filter(Boolean);
+    return Array.from(new Set(all));
+  };
+
+  const EJA_DEBUG_RAW = false;
+  const debugRaw = (...args) => {
+    if (!EJA_DEBUG_RAW) return;
+    console.log("[EJA RAW]", ...args);
+  };
+
+  const RAW_CANONICAL_PL = new Set(["Żelazo", "Tytan", "Zboże", "Paliwo"]);
+
   const normalizeProductName = (name) => {
-    // Split name and quality (e.g. "Weapon Q5" -> ["Weapon", "Q5"])
-    // or "Żelazo" -> ["Żelazo"]
-    let baseName = name;
-    let suffix = "";
+    const input = String(name || "").trim();
+    if (!input) return "";
 
-    if (name.includes(" Q")) {
-      const parts = name.split(" Q");
-      baseName = parts[0];
-      // Determine if this is a Raw Material which should NOT have Q
-      const knownRaws = ["Żelazo", "Iron", "Tytan", "Titanium", "Zboże", "Grain", "Paliwo", "Fuel"];
-      // We can't check 'baseName' easily before normalization??
-      // Actually, if we translate baseName later, we can strip Q there.
-      // BUT input "Fuel Q3" splits to "Fuel" + " Q3".
-      // If we normalize "Fuel" -> "Paliwo", we append " Q3" -> "Paliwo Q3".
-      // So we should check baseName here against known RAW names (both languages).
-      if (!knownRaws.includes(baseName)) {
-        suffix = " Q" + parts[1];
-      }
-    }
+    // Accept normal spaces and NBSP before Q suffix.
+    const match = input.match(/^(.*?)(?:[\s\u00A0]+Q(\d+))?$/i);
+    const baseNameRaw = (match?.[1] || input).trim();
+    const quality = match?.[2] ? ` Q${match[2]}` : "";
+    const canonicalPl = PRODUCT_CANONICAL_PL[normalizeLookupKey(baseNameRaw)] || baseNameRaw;
+    const localized = USER_LANG === "en" ? PRODUCT_PL_TO_EN[canonicalPl] || canonicalPl : canonicalPl;
 
-    // Translate baseName if needed
-    let localized = baseName;
-    if (USER_LANG === "pl") {
-      // If we have English name, translate to PL
-      // Check if baseName is in English keys mapping to PL??
-      // Our dict is mixed. Let's do a direct lookup if key exists.
-      // BUT we need to know source lang.
-      // Let's assume input can be mixed.
-      // Try to find PL equivalent if exists.
-      if (
-        PRODUCT_TRANSLATIONS[baseName] &&
-        !["Żelazo", "Tytan", "Zboże", "Paliwo", "Broń", "Samolot", "Chleb", "Bilet"].includes(baseName)
-      ) {
-        localized = PRODUCT_TRANSLATIONS[baseName];
-      }
-    } else {
-      // Want EN
-      // If input is PL, translate to EN
-      if (
-        PRODUCT_TRANSLATIONS[baseName] &&
-        ["Żelazo", "Tytan", "Zboże", "Paliwo", "Broń", "Samolot", "Chleb", "Bilet"].includes(baseName)
-      ) {
-        localized = PRODUCT_TRANSLATIONS[baseName];
-      }
-    }
-
-    return localized + suffix;
+    // Raws should never display Q suffix.
+    if (RAW_CANONICAL_PL.has(canonicalPl)) return localized;
+    return `${localized}${quality}`;
   };
 
   const getTodayDateKey = () => {
@@ -909,20 +1018,40 @@
   };
 
   let worklogTodayDebugged = false;
+  const parseWorklogRaw = (worklogRaw) => {
+    if (!worklogRaw) return null;
+    try {
+      return JSON.parse(String(worklogRaw).replace(/&quot;/g, '"'));
+    } catch {
+      return null;
+    }
+  };
+
+  const getWorklogEntryByDate = (worklogRaw, dateObj) => {
+    const worklog = parseWorklogRaw(worklogRaw);
+    if (!worklog) return null;
+    const day = dateObj.getDate();
+    const month = dateObj.getMonth() + 1;
+    const year = dateObj.getFullYear();
+    const entry = Object.entries(worklog).find(([k]) => {
+      const parts = String(k).split("/");
+      if (parts.length < 2) return false;
+      const keyDay = parseInt(parts[0], 10);
+      const keyMonth = parseInt(parts[1], 10);
+      const keyYear = parts[2] ? parseInt(parts[2], 10) : null;
+      if (!Number.isFinite(keyDay) || !Number.isFinite(keyMonth)) return false;
+      if (keyYear && Number.isFinite(keyYear) && keyYear !== year) return false;
+      return keyDay === day && keyMonth === month;
+    });
+    return entry || null;
+  };
+
   const getTodayWorklogEntry = (worklogRaw) => {
     if (!worklogRaw) return null;
     try {
-      const worklog = JSON.parse(worklogRaw.replace(/&quot;/g, '"'));
-      const today = new Date();
-      const day = today.getDate();
-      const month = today.getMonth() + 1;
-      const entry = Object.entries(worklog).find(([k]) => {
-        const parts = k.split("/");
-        if (parts.length < 2) return false;
-        const keyDay = parseInt(parts[0], 10);
-        const keyMonth = parseInt(parts[1], 10);
-        return Number.isFinite(keyDay) && Number.isFinite(keyMonth) && keyDay === day && keyMonth === month;
-      });
+      const worklog = parseWorklogRaw(worklogRaw);
+      if (!worklog) return null;
+      const entry = getWorklogEntryByDate(worklogRaw, new Date());
       if (!entry && !worklogTodayDebugged) {
         worklogTodayDebugged = true;
         console.debug("[EJA] Brak wpisu worklog na dzisiaj", { worklogKeys: Object.keys(worklog).slice(0, 5) });
@@ -1032,15 +1161,51 @@
     return currencies;
   };
 
-  const collectDashboardCompanyData = (root = document, yesterday = null) => {
+    const collectDashboardCompanyData = (root = document, yesterday = null) => {
     const companies = [];
     const containers = root.querySelectorAll(".holdings-container");
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+
+    const parseProductionEntry = (entryData, companyQuality, targetMap) => {
+      if (!entryData || !entryData.production) return;
+      try {
+        const tempDiv = document.createElement("div");
+        tempDiv.innerHTML = entryData.production;
+        tempDiv.querySelectorAll(".item.production").forEach((prodItem) => {
+          const prodImg = prodItem.querySelector("img");
+          const prodAmount = parseFloat(prodItem.querySelector(".item__amount-representation")?.textContent || "0") || 0;
+          if (prodAmount <= 0) return;
+          let prodName = prodImg ? prodImg.title || prodImg.alt || "Produkt" : "Produkt";
+          const normalizedProdName = normalizeLookupKey(prodName);
+          const isRawResource =
+            normalizedProdName === "zelazo" ||
+            normalizedProdName === "iron" ||
+            normalizedProdName === "zboze" ||
+            normalizedProdName === "grain" ||
+            normalizedProdName === "tytan" ||
+            normalizedProdName === "titanium" ||
+            normalizedProdName === "paliwo" ||
+            normalizedProdName === "fuel" ||
+            normalizedProdName === "oil" ||
+            normalizedProdName === "ropa";
+          const hasQualitySuffix = /\sQ\d+\b/i.test(prodName);
+          if (companyQuality > 0 && !isRawResource && !hasQualitySuffix) {
+            prodName = `${prodName} Q${companyQuality}`;
+          }
+          const normalizedName = normalizeProductName(prodName);
+          if (!targetMap[normalizedName]) targetMap[normalizedName] = { amount: 0, icon: prodImg?.src || "" };
+          targetMap[normalizedName].amount += prodAmount;
+          if (!targetMap[normalizedName].icon && prodImg?.src) targetMap[normalizedName].icon = prodImg.src;
+        });
+      } catch {}
+    };
+
     containers.forEach((container) => {
       const headerRow = container.querySelector(".row.closeHoldings[data-target]");
       if (!headerRow) return;
       const label = headerRow.querySelector(".holdings-description span");
       let sectionName = label ? (label.dataset.ejaOriginalLabel || label.textContent || "").trim() : "Firmy";
-      // Clean section name (remove count in parens e.g. "Moje firmy (12)")
       sectionName = sectionName.replace(/\(\d+.*$/, "").trim();
 
       const targetKey = (headerRow.getAttribute("data-target") || "").trim();
@@ -1050,25 +1215,24 @@
       const companyRows = targetList.querySelectorAll(".hasBorder[data-id]");
       companyRows.forEach((row) => {
         const companyId = row.getAttribute("data-id") || "";
-        const companyName =
-          row.querySelector(".company-name-h5 span, .company-name, h5")?.textContent?.trim() || "Firma";
-        const companyType = row.getAttribute("data-type") || "";
+        const companyName = row.querySelector(".company-name-h5 span, .company-name, h5")?.textContent?.trim() || "Firma";
+        const companyType = (row.getAttribute("data-type") || "").trim();
         const companyQuality = parseInt(row.getAttribute("data-quality"), 10) || 0;
         const employees = row.querySelectorAll(".employees_list .employee");
         const employeeCount = employees.length;
         const wages = {};
         const wagesUnpaidToday = {};
         const productions = {};
+        const capacityFromEmployees = {};
+
         employees.forEach((emp) => {
           const wage = parseFloat(emp.getAttribute("data-wage") || "0") || 0;
           const currencyCode = emp.getAttribute("data-currencyname") || emp.getAttribute("data-currencycode") || "";
           const currencyIcon = emp.getAttribute("data-currencyavatar") || "";
-          let workedToday = false;
           const worklogRaw = emp.getAttribute("data-worklog") || "";
-          const entry = getTodayWorklogEntry(worklogRaw);
-          if (entry && entry[1]) {
-            workedToday = true;
-          }
+          const todayEntry = getTodayWorklogEntry(worklogRaw);
+          const workedToday = Boolean(todayEntry && todayEntry[1]);
+
           if (wage > 0 && currencyCode) {
             if (!wages[currencyCode]) wages[currencyCode] = { amount: 0, icon: currencyIcon };
             wages[currencyCode].amount += wage;
@@ -1077,44 +1241,50 @@
               wagesUnpaidToday[currencyCode].amount += wage;
             }
           }
-          // Parse today's production from worklog
-          if (entry && entry[1] && entry[1].production) {
-            try {
-              const prodHtml = entry[1].production;
-              const tempDiv = document.createElement("div");
-              tempDiv.innerHTML = prodHtml;
-              tempDiv.querySelectorAll(".item.production").forEach((prodItem) => {
-                const prodImg = prodItem.querySelector("img");
-                const prodAmount =
-                  parseFloat(prodItem.querySelector(".item__amount-representation")?.textContent || "0") || 0;
-                let prodName = prodImg ? prodImg.title || prodImg.alt || "Produkt" : "Produkt";
-                // Add quality suffix if company has quality and product isn't raw resource
-                const isRawResource = /żelazo|iron|zboże|grain|tytan|titanium|paliwo|oil|ropa/i.test(prodName);
-                const hasQualitySuffix = /\sQ\d+\b/i.test(prodName);
-                if (companyQuality > 0 && !isRawResource && !hasQualitySuffix) {
-                  prodName = `${prodName} Q${companyQuality}`;
-                }
-                if (!productions[prodName]) productions[prodName] = { amount: 0, icon: prodImg?.src || "" };
-                productions[prodName].amount += prodAmount;
-              });
-            } catch {}
+
+          if (todayEntry && todayEntry[1]) {
+            parseProductionEntry(todayEntry[1], companyQuality, productions);
           }
+
+          const employeeCapacity = {};
+          if (todayEntry && todayEntry[1]) {
+            parseProductionEntry(todayEntry[1], companyQuality, employeeCapacity);
+          }
+          if (Object.keys(employeeCapacity).length === 0) {
+            const yEntry = getWorklogEntryByDate(worklogRaw, yesterdayDate);
+            if (yEntry && yEntry[1]) {
+              parseProductionEntry(yEntry[1], companyQuality, employeeCapacity);
+            }
+          }
+          Object.entries(employeeCapacity).forEach(([name, data]) => {
+            if (!capacityFromEmployees[name]) capacityFromEmployees[name] = { amount: 0, icon: data.icon || "" };
+            capacityFromEmployees[name].amount += data.amount || 0;
+            if (!capacityFromEmployees[name].icon && data.icon) capacityFromEmployees[name].icon = data.icon;
+          });
         });
 
-        // Calculate Capacity based on Yesterday
+        Object.entries(capacityFromEmployees).forEach(([name, data]) => {
+          if (!productions[name]) productions[name] = { amount: 0, icon: data.icon || "" };
+          if (!productions[name].icon && data.icon) productions[name].icon = data.icon;
+          productions[name].capacity = Math.max(productions[name].capacity || 0, data.amount || 0);
+        });
+
         const yesterdayCompany = yesterday?.companies?.find((c) => c.id === companyId);
         if (yesterdayCompany && yesterdayCompany.productions) {
-          // Check for products produced yesterday but not today
           Object.entries(yesterdayCompany.productions).forEach(([name, data]) => {
-            if (!productions[name]) productions[name] = { amount: 0, icon: data.icon };
+            const normalizedName = normalizeProductName(name);
+            if (!productions[normalizedName]) productions[normalizedName] = { amount: 0, icon: data.icon };
+            productions[normalizedName].capacity = Math.max(
+              productions[normalizedName].capacity || 0,
+              data.capacity || data.amount || 0,
+            );
           });
         }
-        // Set capacity for all products
+
         Object.keys(productions).forEach((name) => {
-          const todayAmt = productions[name].amount;
-          const yestAmt = yesterdayCompany?.productions?.[name]?.amount || 0;
-          // If we produced more today, that's the new proven capacity. If we produced more yesterday, that's the potential.
-          productions[name].capacity = Math.max(todayAmt, yestAmt);
+          const todayAmt = productions[name].amount || 0;
+          const capAmt = productions[name].capacity || 0;
+          productions[name].capacity = Math.max(todayAmt, capAmt);
         });
 
         companies.push({
@@ -1184,10 +1354,23 @@
       const unified = UNIFIED_RAW_NAMES[name] || name;
 
       // For non-raw items, distinguish by quality to avoid merging Q4 and Q5
-      const isRaw = ["Żelazo", "Iron", "Tytan", "Titanium", "Zboże", "Grain", "Paliwo", "Fuel", "Ropa", "Oil"].includes(
-        unified,
-      );
-      const key = !isRaw && quality > 0 ? `${unified} Q${quality}` : unified;
+      const isRaw = [
+        "zelazo",
+        "żelazo",
+        "iron",
+        "tytan",
+        "titanium",
+        "zboze",
+        "zboże",
+        "grain",
+        "paliwo",
+        "fuel",
+        "ropa",
+        "oil",
+      ].includes(normalizeLookupKey(unified));
+      const normalizedName = normalizeProductName(unified);
+      const hasQualityInName = /\sQ\d+\b/i.test(normalizedName);
+      const key = !isRaw && quality > 0 && !hasQualityInName ? `${normalizedName} Q${quality}` : normalizedName;
 
       if (!items[key]) items[key] = { amount: 0, quality: quality, rawName: name };
       items[key].amount += amount;
@@ -1255,7 +1438,7 @@
       // Helper to parse text node: "10.408 IEP" -> {amount: 10408, code: "IEP"}
       const parseText = (txt) => {
         // Matches: "10.408 IEP", "538.394 PLN", "123 GOLD"
-        const m = txt.match(/([\d\s.,]+)\s+([A-Z]{3}|Złoto|Gold|Credits)/i);
+        const m = txt.match(/([\d\s.,]+)\s+([A-Z]{3}|Zloto|Gold|Credits)/i);
         if (m) {
           const valStr = m[1].replace(/\s/g, "");
           let amount = 0;
@@ -1320,8 +1503,8 @@
   // Calculate wages ONLY for "My Companies" (personal wallet needs)
   const calculateWageNeeds = (companies) => {
     const needs = {};
-    // Filter companies: only include those in "Moje firmy" / "My companies" section
-    const myCompanies = companies.filter((c) => /moje firmy|my companies/i.test(c.section));
+    // Filter companies: only include personal section names (PL/EN variants)
+    const myCompanies = companies.filter((c) => isPersonalSectionName(c.section));
 
     myCompanies.forEach((c) => {
       Object.entries(c.wages).forEach(([code, data]) => {
@@ -1339,22 +1522,31 @@
       const haveAmt = have[code]?.amount || 0;
       const needAmt = need[code]?.amount || 0;
       const diff = haveAmt - needAmt;
+      const daysLeft = needAmt > 0 ? haveAmt / needAmt : Infinity;
+      const coverageStatus = needAmt <= 0 ? "ok" : daysLeft >= 2 ? "ok" : daysLeft >= 1 ? "warning" : "insufficient";
       status[code] = {
         have: haveAmt,
         need: needAmt,
         diff,
+        daysLeft,
         icon: have[code]?.icon || need[code]?.icon || "",
-        status: needAmt === 0 ? "ok" : diff >= 0 ? "ok" : diff >= -needAmt * 0.2 ? "warning" : "insufficient",
+        status: coverageStatus,
       };
     });
     return status;
+  };
+
+  const getCurrencyStatusColor = (status) => {
+    if (status === "ok") return "#22c55e";
+    if (status === "warning") return "#f59e0b";
+    return "#ef4444";
   };
 
   const getWageCoverageLabel = (bankAmt, dailyWage, unpaidToday) => {
     const daysLeft = dailyWage > 0 ? bankAmt / dailyWage : 0;
     const remainingToday = Math.max(0, unpaidToday || 0);
     const todayCovered = dailyWage > 0 && bankAmt >= remainingToday;
-    const label = todayCovered ? "Dzisiaj opłacone, brakuje na jutro" : "Brakuje już na dzisiaj";
+    const label = todayCovered ? "Dzisiaj oplacone, brakuje" : "Brakuje juz na dzisiaj";
     return { daysLeft, label };
   };
 
@@ -1635,6 +1827,23 @@
       .eja-action-item.critical { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.1); }
       .eja-action-item.warning { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
       .eja-action-item.high { border-left-color: #f59e0b; }
+      .eja-action-item.is-done {
+        opacity: 0.45;
+        filter: saturate(0.7);
+        border-left-color: #64748b !important;
+        background: rgba(100, 116, 139, 0.12) !important;
+      }
+      .eja-action-item__main {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      .eja-action-item__check {
+        margin-top: 2px;
+        width: 16px;
+        height: 16px;
+        cursor: pointer;
+      }
       .eja-action-btn {
         font-size: 11px;
         padding: 4px 8px;
@@ -1715,6 +1924,19 @@
         }
       };
       document.addEventListener("keydown", document.__ejaDashboardEscHandler);
+
+      if (!overlay.__ejaActionDoneBound) {
+        overlay.__ejaActionDoneBound = true;
+        overlay.addEventListener("change", (event) => {
+          const target = event.target;
+          if (!target || !target.matches || !target.matches("input[data-eja-action-done]")) return;
+          const actionId = target.getAttribute("data-eja-action-done") || "";
+          const isDone = Boolean(target.checked);
+          setActionItemDone(actionId, isDone);
+          const row = target.closest(".eja-action-item");
+          if (row) row.classList.toggle("is-done", isDone);
+        });
+      }
     };
 
     bindDashboardEvents();
@@ -1776,9 +1998,8 @@
       // 1. Calculate Needs
       const needs = {};
       sectionCompanies.forEach((c) => {
-        const type = c.type;
-        const rawName = COMPANY_TYPE_TO_RAW[type];
-        // Normalize to unified key (e.g. "Iron" -> "Żelazo")
+        const rawName = getRawForCompanyType(c.type);
+        // Normalize to unified key (e.g. "Iron" -> "Zelazo")
         const mappedRaw = UNIFIED_RAW_NAMES[rawName] || rawName;
 
         if (mappedRaw && c.quality) {
@@ -1796,16 +2017,12 @@
       let stocks = {};
 
       // Case-insensitive matching for Holding
-      const holding = holdings.find((h) => h.name.toLowerCase() === sectionName.toLowerCase());
+      const holding = holdings.find((h) => normalizeSectionName(h.name) === normalizeSectionName(sectionName));
 
       if (holding) {
         // Holding Section -> Use Holding Storage ONLY
         stocks = holding.items || {};
-      } else if (
-        sectionName.toLowerCase().includes("moje") ||
-        sectionName.toLowerCase().includes("own") ||
-        sectionName === "Sektor Prywatny"
-      ) {
+      } else if (isPersonalSectionName(sectionName)) {
         // Private Section -> Use User Storage
         stocks = userStorage;
       } else {
@@ -1815,12 +2032,26 @@
       }
 
       // 3. Render
+      debugRaw("Section snapshot", {
+        sectionName,
+        needs,
+        stocksKeys: Object.keys(stocks || {}),
+      });
       const rows = Object.entries(needs)
         .map(([rawName, dailyNeed]) => {
-          const stockItem = stocks[rawName] || { amount: 0 };
+          const candidates = getRawStockCandidates(rawName);
+          const stockItem = candidates.map((name) => stocks[name]).find(Boolean) || { amount: 0 };
           const have = stockItem.amount || 0;
           const daysLeft = dailyNeed > 0 ? have / dailyNeed : 0;
           const statusColor = daysLeft >= 1 ? "#22c55e" : daysLeft > 0.2 ? "#f59e0b" : "#ef4444";
+          debugRaw("Raw row", {
+            sectionName,
+            rawName,
+            candidates,
+            matchedKey: candidates.find((name) => Boolean(stocks[name])) || null,
+            have,
+            dailyNeed,
+          });
 
           return `
                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:2px;">
@@ -1842,13 +2073,6 @@
            </div>
          `;
     }
-
-    const normalizeSectionName = (name) => (name || "").trim().toLowerCase();
-
-    const isPersonalSectionName = (name) => {
-      const normalized = normalizeSectionName(name);
-      return normalized === "moje firmy" || normalized === "my companies";
-    };
 
     // Group companies by section
     const sections = {};
@@ -1921,7 +2145,7 @@
           ([name, data]) =>
             `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount} ${name}</span>`,
         )
-        .join("") || '<span style="color:#64748b">Brak produkcji</span>';
+        .join("") || '<span style="color:#64748b">—</span>';
 
     const totalWagesChips =
       Object.entries(totalWages)
@@ -1929,6 +2153,18 @@
           ([code, data]) =>
             `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(3)} ${code}</span>`,
         )
+        .join("") || '<span style="color:#64748b">—</span>';
+
+    const buildCurrencyBankChips = (entries) =>
+      entries
+        .map((entry) => {
+          const color = getCurrencyStatusColor(entry.status);
+          const daysBadge =
+            Number.isFinite(entry.daysLeft) && entry.daysLeft >= 0
+              ? `<span style="margin-left:4px;color:${color};font-size:10px;">(${entry.daysLeft.toFixed(1)}d)</span>`
+              : "";
+          return `<span class="eja-chip" style="border-left:3px solid ${color};padding-left:6px;">${entry.icon ? `<img src="${entry.icon}">` : ""}${entry.amount.toLocaleString()} ${entry.code}${daysBadge}</span>`;
+        })
         .join("") || '<span style="color:#64748b">—</span>';
 
     // Build section HTML
@@ -1941,6 +2177,7 @@
 
       // Find matching holding for this section
       const holding = holdingsData.find((h) => normalizeSectionName(h.name) === normalizeSectionName(sectionName));
+      const isPersonalSection = isPersonalSectionName(sectionName);
 
       // Build Holding Info (Merged View)
       let holdingInfoHTML = "";
@@ -1948,21 +2185,31 @@
         // Bank
         const bankChips =
           Object.entries(holding.bank || {})
-            .map(
-              ([curr, data]) =>
-                `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toLocaleString()} ${curr}</span>`,
-            )
+            .map(([curr, data]) => {
+              const dailyWage = sectionData.wages?.[curr]?.amount || 0;
+              const daysLeft = dailyWage > 0 ? data.amount / dailyWage : Infinity;
+              const status = dailyWage <= 0 ? "ok" : daysLeft >= 2 ? "ok" : daysLeft >= 1 ? "warning" : "insufficient";
+              const color = getCurrencyStatusColor(status);
+              const daysBadge =
+                Number.isFinite(daysLeft) && daysLeft >= 0
+                  ? `<span style="margin-left:4px;color:${color};font-size:10px;">(${daysLeft.toFixed(1)}d)</span>`
+                  : "";
+              return `<span class="eja-chip" style="border-left:3px solid ${color};padding-left:6px;">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toLocaleString()} ${curr}${daysBadge}</span>`;
+            })
             .join("") || '<span style="color:#64748b">—</span>';
 
         // Storage
         const storageItems =
           Object.entries(holding.items || {})
             .map(([name, data]) => {
-              const qText = data.quality ? ` Q${data.quality}` : "";
-              return `<span class="eja-chip">${data.amount.toLocaleString()} ${name}${qText}</span>`;
+              const normalizedName = normalizeProductName(name);
+              const hasQualityInName = /\sQ\d+\b/i.test(normalizedName);
+              const qText = data.quality && !hasQualityInName ? ` Q${data.quality}` : "";
+              return `<span class="eja-chip">${data.amount.toLocaleString()} ${normalizedName}${qText}</span>`;
             })
             .join("") || '<span style="color:#64748b;margin-left:4px;">Pusty</span>';
 
+        let storageInfoHTML = "";
         if (holding.storage) {
           const free = holding.storage.free;
           const capColor = free < 500 ? "#ef4444" : free < 1000 ? "#f59e0b" : "#22c55e";
@@ -1980,6 +2227,26 @@
                 <div style="display:flex;align-items:center;">
                      <strong style="color:#94a3b8;font-size:11px;">STAN MAGAZYNU ${storageInfoHTML}:</strong>
                      <div style="margin-left:8px;display:flex;flex-wrap:wrap;gap:4px;">${storageItems}</div>
+                </div>
+            </div>
+          `;
+      }
+      if (!holding && isPersonalSection) {
+        const bankEntries = Object.entries(currencyStatus)
+          .filter(([, data]) => data.have > 0 || data.need > 0)
+          .map(([code, data]) => ({
+            code,
+            amount: data.have || 0,
+            icon: data.icon || "",
+            status: data.status || "ok",
+            daysLeft: data.daysLeft,
+          }));
+        const bankChips = buildCurrencyBankChips(bankEntries);
+        holdingInfoHTML = `
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.1);">
+                <div style="margin-bottom:8px;">
+                     <strong style="color:#94a3b8;font-size:11px;">STAN BANKU (MOJE FIRMY):</strong>
+                     <div style="margin-top:4px;">${bankChips}</div>
                 </div>
             </div>
           `;
@@ -2049,12 +2316,12 @@
           <h3>${sectionIcon} ${sectionName}</h3>
           <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px;">
             <div><strong style="color:#94a3b8;font-size:11px;">PRACOWNICY:</strong> ${empDisplay}</div>
-            <div><strong style="color:#94a3b8;font-size:11px;">KOSZTY/DZIEŃ:</strong> ${sectionWagesChips}</div>
-            <div><strong style="color:#94a3b8;font-size:11px;">PRODUKCJA (MOŻLIWOŚCI):</strong> ${sectionProdChips}</div>
+            <div><strong style="color:#94a3b8;font-size:11px;">KOSZTY/DZIEN:</strong> ${sectionWagesChips}</div>
+            <div><strong style="color:#94a3b8;font-size:11px;">PRODUKCJA (MOZLIWOSCI):</strong> ${sectionProdChips}</div>
           </div>
 
           <details style="margin-top:8px;">
-            <summary style="cursor:pointer;font-size:12px;color:#60a5fa;">Pokaż firmy (${sectionCompanies.length})</summary>
+            <summary style="cursor:pointer;font-size:12px;color:#60a5fa;">Pokaz firmy (${sectionCompanies.length})</summary>
             <table class="eja-company-table" style="margin-top:8px;">
               <thead>
                 <tr><th>Firma</th><th>Pracownicy</th><th>Koszty</th><th>Produkcja</th></tr>
@@ -2087,12 +2354,12 @@
                 ([code, data]) =>
                   `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(3)} ${code}</span>`,
               )
-              .join("") || '<span style="color:#64748b">Brak środków</span>';
+              .join("") || '<span style="color:#64748b">—</span>';
 
           // Storage info
           const storageInfo = h.storage
             ? `<span style="color:${h.storage.free < 100 ? "#ef4444" : "#22c55e"};">📦 ${h.storage.used.toLocaleString()} / ${h.storage.capacity.toLocaleString()} (Wolne: ${h.storage.free.toLocaleString()})</span>`
-            : '<span style="color:#64748b">Brak danych</span>';
+            : '<span style="color:#64748b">—</span>';
 
           // Alerts: Check if funds < 2 * daily wages
           let alerts = "";
@@ -2134,37 +2401,6 @@
     // const holdingsDataHTML = buildHoldingsDataHTML(holdingsData, sections); // REMOVED (Merged into Sections)
     const holdingsDataHTML = "";
 
-    // Global currency status (compact grid)
-    const currencyCards = Object.entries(currencyStatus)
-      .filter(([, data]) => data.need > 0)
-      .sort((a, b) => b[1].need - a[1].need)
-      .map(([code, data]) => {
-        const color = data.status === "ok" ? "#22c55e" : data.status === "warning" ? "#f59e0b" : "#ef4444";
-        // Precision: 0.001 per user request
-        const diffInt = data.diff.toFixed(3);
-        const diffText = data.diff >= 0 ? "OK" : diffInt;
-        return `
-          <div class="eja-currency-compact-item" style="border-left: 3px solid ${color}">
-            <div class="eja-currency-compact-header">
-               <span style="display:flex;align-items:center;gap:4px;">
-                 ${data.icon ? `<img src="${data.icon}" style="width:14px;height:14px;">` : ""} ${code}
-               </span>
-               <span style="color:${color}">${diffText}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;color:#94a3b8;margin-top:2px;">
-               <span>Potrzeba:</span>
-               <strong>${data.need.toFixed(3)}</strong>
-            </div>
-            <div style="display:flex;justify-content:space-between;color:#94a3b8;">
-               <span>Masz:</span>
-               <span>${data.have.toFixed(3)}</span>
-            </div>
-            ${data.diff < 0 ? `<a href="https://eclesiar.com/market/coin/advanced" target="_blank" class="eja-buy-link" style="text-align:right;margin-top:4px;">Kup braki →</a>` : ""}
-          </div>
-        `;
-      })
-      .join("");
-
     // --- ACTION ITEMS COLLECTION ---
     const actionItems = [];
 
@@ -2179,6 +2415,7 @@
             priority: "high",
             text: `<b>${c.name}</b> (${c.section}): Odeszło <b>${diff}</b> pracow.`,
             link: `/business/${c.id}`,
+            actionId: `employee:${c.id}`,
           });
         }
       });
@@ -2192,6 +2429,7 @@
           priority: "critical",
           text: `Brakuje <b>${Math.abs(data.diff).toFixed(3)} ${code}</b> na koncie prywatnym.`,
           link: "https://eclesiar.com/market/coin/advanced",
+          actionId: `currency:${code}`,
         });
       }
     });
@@ -2209,26 +2447,55 @@
           actionItems.push({
             type: "holding",
             priority: "warning",
-            text: `<b>${h.name}</b>: ${label} — <b>${curr}</b> na ${daysLeft.toFixed(1)} dnia.`,
+            text: `<b>${h.name}</b>: ${label} - <b>${curr}</b> na ${daysLeft.toFixed(1)} dnia. (<b>Zapotrzebowanie/dzień:</b> ${dailyWage.toFixed(3)} ${curr})`,
             link: `/holding/${h.id}`,
+            marketLink: "https://eclesiar.com/market/coin/advanced",
+            actionId: `holding-funds:${h.id}:${curr}`,
           });
         }
       });
     });
 
+    // 4. Holding Low Free Storage
+    holdingsData.forEach((h) => {
+      const free = h?.storage?.free;
+      const used = h?.storage?.used;
+      const capacity = h?.storage?.capacity;
+      if (!Number.isFinite(free) || !Number.isFinite(used) || !Number.isFinite(capacity) || capacity <= 0) return;
+      if (free >= 1000) return;
+
+      const priority = free < 500 ? "critical" : "warning";
+      actionItems.push({
+        type: "storage",
+        priority,
+        text: `<b>${h.name}</b>: niski wolny magazyn - <b>${Math.round(free).toLocaleString("pl-PL")}</b> wolne (${Math.round(used).toLocaleString("pl-PL")} / ${Math.round(capacity).toLocaleString("pl-PL")}).`,
+        link: `/holding/${h.id}`,
+        actionId: `storage-free:${h.id}`,
+      });
+    });
+
     const buildActionSection = () => {
       if (actionItems.length === 0) return "";
+      const actionState = loadActionItemsState();
 
       const itemsHtml = actionItems
         .sort((a, b) => (a.priority === "critical" ? -1 : 1)) // Critical first
-        .map(
-          (item) => `
-                <div class="eja-action-item ${item.priority}">
-                    <span>${item.text}</span>
-                    <a href="${item.link}" target="_blank" class="eja-action-btn">Zarządzaj →</a>
+        .map((item) => {
+          const actionId = item.actionId || `${item.type}:${item.link}:${item.text}`;
+          const isDone = Boolean(actionState[actionId]);
+          return `
+                <div class="eja-action-item ${item.priority}${isDone ? " is-done" : ""}" data-eja-action-item="${actionId}">
+                    <div class="eja-action-item__main">
+                      <input class="eja-action-item__check" type="checkbox" data-eja-action-done="${actionId}" ${isDone ? "checked" : ""} title="Oznacz jako zrobione / pomiń">
+                      <span>${item.text}</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                      <a href="${item.link}" target="_blank" class="eja-action-btn">Zarzadzaj -></a>
+                      ${item.marketLink ? `<a href="${item.marketLink}" target="_blank" class="eja-action-btn">Rynek walut -></a>` : ""}
+                    </div>
                 </div>
-            `,
-        )
+            `;
+        })
         .join("");
 
       return `
@@ -2244,7 +2511,7 @@
     // --- SPLIT SUMMARY LOGIC ---
     const STATE_HOLDINGS = [
       "Polska Kompania Naftowa",
-      "Polska Grupa Żywieniowa",
+      "Polska Grupa Zywieniowa",
       "Polska Grupa Zbrojeniowa",
       "Ministerstwo Edukacji Narodowej",
       "Polska Grupa Lotnicza",
@@ -2278,8 +2545,9 @@
           wages[code].amount += data.amount;
         });
         Object.entries(c.productions).forEach(([name, data]) => {
-          if (!productions[name]) productions[name] = { amount: 0, icon: data.icon };
-          productions[name].amount += data.amount;
+          const normName = normalizeProductName(name);
+          if (!productions[normName]) productions[normName] = { amount: 0, icon: data.icon };
+          productions[normName].amount += data.amount;
         });
       });
 
@@ -2297,7 +2565,7 @@
             ([name, data]) =>
               `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount} ${name}</span>`,
           )
-          .join("") || '<span style="color:#64748b">Brak produkcji</span>';
+          .join("") || '<span style="color:#64748b">—</span>';
 
       return {
         totalEmps,
@@ -2322,7 +2590,7 @@
             <div><strong style="color:#94a3b8;font-size:11px;display:block;">FIRMY</strong><span style="font-size:20px;font-weight:700;">${stats.companyCount}</span></div>
           </div>
           <div style="margin-top:12px;">
-            <div><strong style="color:#94a3b8;font-size:11px;">KOSZTY/DZIEŃ:</strong> ${stats.wageChips}</div>
+            <div><strong style="color:#94a3b8;font-size:11px;">KOSZTY/DZIEN:</strong> ${stats.wageChips}</div>
             <div style="margin-top:6px;"><strong style="color:#94a3b8;font-size:11px;">PRODUKCJA:</strong> ${stats.prodChips}</div>
           </div>
         </div>
@@ -2349,17 +2617,6 @@
         ${buildActionSection()}
 
         ${summariesHTML}
-
-        ${
-          currencyCards.length
-            ? `
-        <div class="eja-dashboard-section">
-          <h3>💰 Bilans Walut (Twoje Konto)</h3>
-          <div class="eja-currency-compact-grid">${currencyCards}</div>
-        </div>
-        `
-            : ""
-        }
 
         ${holdingsDataHTML}
 
@@ -2924,7 +3181,7 @@
       pinBtn.type = "button";
       pinBtn.className = `btn-action-blue eja-coin-chip__pin${isPinned ? " is-pinned" : ""}`;
       pinBtn.title = isPinned ? "Odepnij" : "Przypnij";
-      pinBtn.textContent = isPinned ? "★" : "☆";
+      pinBtn.textContent = isPinned ? "?" : "?";
       pinBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -2945,7 +3202,7 @@
     }
     const label = document.createElement("span");
     label.className = "eja-coin-quick-buy__favorites-label";
-    label.textContent = "Przypięte:";
+    label.textContent = "Przypiete:";
     container.appendChild(label);
     pinnedIds
       .map((id) => items.find((item) => item.holdingId === id))
@@ -2971,7 +3228,7 @@
       const empty = document.createElement("div");
       empty.style.fontSize = "11px";
       empty.style.color = "#64748b";
-      empty.textContent = "Brak dopasowań.";
+      empty.textContent = "Brak dopasowan.";
       container.appendChild(empty);
       return;
     }
@@ -3005,13 +3262,13 @@
 
       const title = document.createElement("div");
       title.className = "eja-coin-quick-buy__title";
-      title.innerHTML = "⚡";
+      title.innerHTML = "?";
       header.appendChild(title);
 
       const allBtn = document.createElement("button");
       allBtn.type = "button";
       allBtn.className = "eja-coin-quick-buy__all-btn";
-      allBtn.textContent = "Pokaż wszystkie";
+      allBtn.textContent = "Pokaz wszystkie";
       header.appendChild(allBtn);
 
       const favorites = document.createElement("div");
@@ -3167,7 +3424,7 @@
     [
       "Farma",
       "Farm",
-      "Kopalnia żelaza",
+      "Kopalnia zelaza",
       "Iron Mine",
       "Kopalnia tytanu",
       "Titanium Mine",
@@ -3439,7 +3696,6 @@
   };
 
   const start = () => {
-    initUmamiTracking();
     initMarketSaleNotificationFilter();
     injectSettingsPanel();
     if (isCoinAdvancedPage()) {
@@ -3573,3 +3829,7 @@
 
   onReady(start);
 })();
+
+
+
+
