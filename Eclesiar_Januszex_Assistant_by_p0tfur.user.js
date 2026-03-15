@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Eclesiar Janueszex Assistant by p0tfur
 // @namespace    https://eclesiar.com/
-// @version      1.5.1
+// @version      1.5.7
 // @description  Janueszex Assistant
 // @author       p0tfur
 // @match        https://eclesiar.com/*
@@ -20,7 +20,7 @@
     addHoldingsToMenu: EJA_ADD_HOLDINGS_TO_MENU,
     jobsEnhancements: true,
     dashboardEnabled: true,
-    sellPageHelpers: true,
+    payrollListEnabled: true,
     hideMarketSaleNotifications: false,
     generateDailySalesSummaries: true,
     coinAdvancedQuickBuyHoldings: true,
@@ -60,6 +60,9 @@
   const HOLDINGS_JOBS_CACHE_TTL_MS = 48 * 60 * 60 * 1000; // 48h
   let holdingsCacheWarned = false;
   let holdingsJobsCache = { updatedAt: 0, holdings: [], inFlight: null };
+  let jobsCompaniesCache = new Map();
+  const productNameByIdRuntime = new Map();
+  const EJA_DEBUG_PRODUCT_IDS = false;
 
   const clearHoldingsCache = () => {
     try {
@@ -69,6 +72,8 @@
     }
     holdingsCacheWarned = false;
     holdingsJobsCache = { updatedAt: 0, holdings: [], inFlight: null };
+    jobsCompaniesCache = new Map();
+    productNameByIdRuntime.clear();
   };
 
   // Business Dashboard Configuration
@@ -86,14 +91,65 @@
   const SALES_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
   const SALES_CACHE_VERSION = "v4";
   const TRANSACTIONS_ALL_FILTER = "all";
+  const PAYROLL_HISTORY_DAYS = 7;
   let salesDB = null;
   let salesOverlayOpen = false;
+  let payrollOverlayOpen = false;
+  let payrollApiToken = null;
+  const payrollHistoryCache = new Map();
 
   const onReady = (fn) => {
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", fn, { once: true });
     } else {
       fn();
+    }
+  };
+
+  const setPayrollApiToken = (value) => {
+    if (!value) return;
+    const token = String(value).replace(/^Bearer\s+/i, "").trim();
+    if (!token) return;
+    if (token !== payrollApiToken) payrollApiToken = token;
+  };
+
+  const extractAuthorizationHeader = (headers) => {
+    if (!headers) return "";
+    if (headers instanceof Headers) return headers.get("Authorization") || headers.get("authorization") || "";
+    if (Array.isArray(headers)) {
+      const match = headers.find(([key]) => String(key).toLowerCase() === "authorization");
+      return match ? match[1] : "";
+    }
+    if (typeof headers === "object") return headers.Authorization || headers.authorization || "";
+    return "";
+  };
+
+  const installPayrollApiTokenInterceptor = () => {
+    if (window.__ejaPayrollTokenInterceptorInstalled) return;
+    window.__ejaPayrollTokenInterceptorInstalled = true;
+
+    const nativeSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+    if (typeof nativeSetHeader === "function") {
+      XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+        try {
+          if (String(name).toLowerCase() === "authorization") setPayrollApiToken(value);
+        } catch {}
+        return nativeSetHeader.apply(this, arguments);
+      };
+    }
+
+    const nativeFetch = window.fetch;
+    if (typeof nativeFetch === "function") {
+      window.fetch = async (...args) => {
+        try {
+          const request = args[0];
+          const init = args[1];
+          const headers = init?.headers || (request instanceof Request ? request.headers : null);
+          const authHeader = extractAuthorizationHeader(headers);
+          if (authHeader) setPayrollApiToken(authHeader);
+        } catch {}
+        return nativeFetch(...args);
+      };
     }
   };
 
@@ -172,6 +228,22 @@
       console.warn("[EJA Sales] Failed to read cache:", e);
       return null;
     }
+  };
+
+  const hasWorkedFromWorklogEntry = (entryValue) => {
+    if (!entryValue) return false;
+    if (typeof entryValue === "string") {
+      return /item__amount-representation|item production|item consumption|<img|Production|Consumption/i.test(entryValue);
+    }
+    if (Array.isArray(entryValue)) {
+      return entryValue.some((item) => hasWorkedFromWorklogEntry(item));
+    }
+    if (typeof entryValue === "object") {
+      const directAmount = parseFloat(entryValue.amount || entryValue.produced || entryValue.value || 0) || 0;
+      if (directAmount > 0) return true;
+      return Object.values(entryValue).some((value) => hasWorkedFromWorklogEntry(value));
+    }
+    return false;
   };
 
   const saveSalesSummaryCache = async (payload) => {
@@ -604,7 +676,7 @@
   };
 
   const updateJobsOverlayPause = () => {
-    document.__ejaJobsPause = dashboardOverlayOpen || salesOverlayOpen;
+    document.__ejaJobsPause = dashboardOverlayOpen || salesOverlayOpen || payrollOverlayOpen;
   };
 
   const yieldToMainThread = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -638,10 +710,445 @@
 
   const clearSalesButtonLoading = (button) => {
     if (!button || button.dataset.ejaLoading !== "1") return;
-    button.disabled = false;
-    button.innerHTML = button.dataset.ejaOriginalHtml || "💰 Podsumowanie sprzedaży";
+    button.innerHTML = button.dataset.ejaOriginalHtml || button.innerHTML;
     delete button.dataset.ejaLoading;
     delete button.dataset.ejaOriginalHtml;
+  };
+
+  const setActionButtonLoading = (button) => {
+    if (!button || button.dataset.ejaLoading === "1") return;
+    button.dataset.ejaLoading = "1";
+    button.dataset.ejaOriginalHtml = button.innerHTML;
+    button.disabled = true;
+    button.style.opacity = "0.7";
+    button.innerHTML = "⏳ Ładowanie...";
+  };
+
+  const clearActionButtonLoading = (button) => {
+    if (!button || button.dataset.ejaLoading !== "1") return;
+    button.innerHTML = button.dataset.ejaOriginalHtml || button.innerHTML;
+    button.disabled = false;
+    button.style.opacity = "";
+    delete button.dataset.ejaLoading;
+    delete button.dataset.ejaOriginalHtml;
+  };
+
+  const ensurePayrollStyles = () => {
+    if (document.getElementById("eja-payroll-styles")) return;
+    const style = document.createElement("style");
+    style.id = "eja-payroll-styles";
+    style.textContent = `
+      .eja-payroll-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 9998;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+      .eja-payroll-backdrop.visible { opacity: 1; }
+      .eja-payroll-overlay {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) scale(0.96);
+        width: min(1180px, 95vw);
+        max-height: 88vh;
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        opacity: 0;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        overflow: hidden;
+      }
+      .eja-payroll-overlay.visible { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      .eja-payroll-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      }
+      .eja-payroll-header h2 { margin: 0; font-size: 18px; font-weight: 700; }
+      .eja-payroll-close {
+        background: rgba(148, 163, 184, 0.2);
+        border: none;
+        color: #e2e8f0;
+        padding: 6px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .eja-payroll-body {
+        padding: 16px 20px 20px;
+        overflow: auto;
+      }
+      .eja-payroll-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+        color: #94a3b8;
+        font-size: 13px;
+      }
+      .eja-payroll-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      .eja-payroll-table th,
+      .eja-payroll-table td {
+        padding: 10px 8px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+        text-align: left;
+        vertical-align: middle;
+      }
+      .eja-payroll-table th {
+        position: sticky;
+        top: 0;
+        background: #0f172a;
+        z-index: 1;
+        color: #94a3b8;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .eja-payroll-table tr:hover td {
+        background: rgba(148, 163, 184, 0.05);
+      }
+      .eja-payroll-section-row td {
+        background: rgba(15, 23, 42, 0.9);
+        color: #f8fafc;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-size: 11px;
+        border-top: 1px solid rgba(148, 163, 184, 0.35);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+      }
+      .eja-payroll-section-row td span {
+        color: #94a3b8;
+        font-weight: 500;
+        margin-left: 8px;
+      }
+      .eja-payroll-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .eja-payroll-badge.is-worked {
+        color: #bbf7d0;
+        background: rgba(34, 197, 94, 0.16);
+      }
+      .eja-payroll-badge.is-missed {
+        color: #fecaca;
+        background: rgba(239, 68, 68, 0.16);
+      }
+      .eja-payroll-money {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .eja-payroll-money img {
+        width: 16px;
+        height: 16px;
+        object-fit: contain;
+      }
+      .eja-payroll-day-cell {
+        text-align: center !important;
+        white-space: nowrap;
+      }
+      .eja-payroll-muted { color: #94a3b8; }
+      @media (max-width: 800px) {
+        .eja-payroll-overlay { width: 98vw; max-height: 92vh; }
+        .eja-payroll-table { font-size: 12px; }
+        .eja-payroll-table th,
+        .eja-payroll-table td { padding: 8px 6px; }
+      }
+    `;
+    document.head.appendChild(style);
+  };
+
+  const getPayrollDateColumns = (entries, todayKey, yesterdayKey) => {
+    const dateSet = new Set();
+    entries.forEach((entry) => {
+      Object.keys(entry.historyByDate || {}).forEach((dateKey) => dateSet.add(dateKey));
+    });
+    if (!dateSet.size) {
+      return [yesterdayKey, todayKey].filter(Boolean);
+    }
+    return Array.from(dateSet).sort(sortPayrollHistoryDateKeys);
+  };
+
+  const renderPayrollHistoryCell = (entry, dateKey, todayKey, yesterdayKey) => {
+    const dayInfo = entry.historyByDate?.[dateKey] || null;
+    if (dayInfo) {
+      const worked = dayInfo.worked;
+      const label = dayInfo.label || "-";
+      if (worked === true) return `<span class="eja-payroll-badge is-worked">${label}</span>`;
+      if (worked === false) return '<span class="eja-payroll-badge is-missed">-</span>';
+      return `<span class="eja-payroll-muted">${label}</span>`;
+    }
+
+    if (dateKey === todayKey) {
+      if (entry.workedToday === true) return '<span class="eja-payroll-badge is-worked">Pracował</span>';
+      if (entry.workedToday === false) return '<span class="eja-payroll-badge is-missed">-</span>';
+      return '<span class="eja-payroll-muted">-</span>';
+    }
+
+    if (dateKey === yesterdayKey) {
+      if (entry.workedYesterday === true) return '<span class="eja-payroll-badge is-worked">Pracował</span>';
+      if (entry.workedYesterday === false) return '<span class="eja-payroll-badge is-missed">-</span>';
+      return '<span class="eja-payroll-muted">-</span>';
+    }
+
+    return '<span class="eja-payroll-muted">-</span>';
+  };
+
+  const computePayrollProductionMetrics = (entry, dateColumns) => {
+    const wage = Number(entry?.wage || 0);
+    let totalProduction = 0;
+    let productionDays = 0;
+
+    dateColumns.forEach((dateKey) => {
+      const dayInfo = entry?.historyByDate?.[dateKey];
+      const productionAmount = Number(dayInfo?.productionAmount || 0);
+      if (Number.isFinite(productionAmount) && productionAmount > 0) {
+        totalProduction += productionAmount;
+        productionDays += 1;
+      }
+    });
+
+    const avgProduction = productionDays > 0 ? totalProduction / productionDays : null;
+    const productionCost = avgProduction && wage > 0 ? wage / avgProduction : null;
+
+    return {
+      avgProduction,
+      productionCost,
+    };
+  };
+
+  const buildPayrollHTML = (entries) => {
+    if (!entries.length) {
+      return '<div class="eja-payroll-muted">Brak danych pracowników do wyświetlenia.</div>';
+    }
+
+    const todayKey = getTodayKey();
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayKey = getPayrollHistoryDateKey(yesterdayDate);
+    const dateColumns = getPayrollDateColumns(entries, todayKey, yesterdayKey);
+    const workedTodayCount = entries.filter((entry) => {
+      const todayInfo = entry.historyByDate?.[todayKey] || null;
+      if (todayInfo && (todayInfo.worked === true || todayInfo.worked === false)) return todayInfo.worked === true;
+      return entry.workedToday === true;
+    }).length;
+    const sectionColspan = 5 + dateColumns.length;
+    const periodLabel = dateColumns.length
+      ? dateColumns.length === 1
+        ? dateColumns[0]
+        : `${dateColumns[0]} - ${dateColumns[dateColumns.length - 1]}`
+      : "-";
+
+    let lastSection = null;
+    const rows = entries
+      .map((entry) => {
+        const sectionLabel = entry.section || "Inne";
+        const shouldInsertSection = sectionLabel !== lastSection;
+        if (shouldInsertSection) lastSection = sectionLabel;
+        const metrics = computePayrollProductionMetrics(entry, dateColumns);
+        const avgProductionLabel =
+          metrics.avgProduction != null
+            ? formatNumericValue(metrics.avgProduction, { minFractionDigits: 0, maxFractionDigits: 2 })
+            : "-";
+        const productionCostLabel =
+          metrics.productionCost != null
+            ? `${formatNumericValue(metrics.productionCost, { minFractionDigits: 0, maxFractionDigits: 4 })} ${entry.currencyCode || ""}`.trim()
+            : "-";
+        const dayCells = dateColumns
+          .map(
+            (dateKey) => `<td class="eja-payroll-day-cell">${renderPayrollHistoryCell(entry, dateKey, todayKey, yesterdayKey)}</td>`,
+          )
+          .join("");
+        return `
+          ${shouldInsertSection ? `<tr class="eja-payroll-section-row"><td colspan="${sectionColspan}">${sectionLabel}<span>${sectionLabel.toLowerCase().includes("holding") ? "Holding" : "Sekcja"}</span></td></tr>` : ""}
+          <tr>
+            <td>${entry.workerName}</td>
+            <td>${entry.companyName}</td>
+            <td>
+              <span class="eja-payroll-money">
+                ${entry.currencyIcon ? `<img src="${entry.currencyIcon}" alt="${entry.currencyCode}">` : ""}
+                ${formatNumericValue(entry.wage)} ${entry.currencyCode || ""}
+              </span>
+            </td>
+            <td>${avgProductionLabel}</td>
+            <td>${productionCostLabel}</td>
+            ${dayCells}
+          </tr>
+        `;
+      })
+      .join("");
+
+    const dateHeaders = dateColumns.map((dateKey) => `<th class="eja-payroll-day-cell">${dateKey}</th>`).join("");
+
+    return `
+      <div class="eja-payroll-toolbar">
+        <span>Liczba pracowników: <strong>${entries.length}</strong></span>
+        <span>Zapracowali dziś: <strong>${workedTodayCount}</strong> / ${entries.length}</span>
+        <span>Zakres: <strong>${periodLabel}</strong></span>
+      </div>
+      <table class="eja-payroll-table">
+        <thead>
+          <tr>
+            <th>Pracownik</th>
+            <th>Firma</th>
+            <th>Pensja / dzień</th>
+            <th>Śr. produkcja</th>
+            <th>Koszt produkcji</th>
+            ${dateHeaders}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    `;
+  };
+
+  const getWorkerWorkedFlag = (worker, dayKey = "today") => {
+    if (!worker || typeof worker !== "object") return null;
+    const directCandidates =
+      dayKey === "today"
+        ? [
+            worker.workedToday,
+            worker.isWorkedToday,
+            worker.hasWorkedToday,
+            worker.workToday,
+            worker.todayWorked,
+            worker.today,
+          ]
+        : [
+            worker.workedYesterday,
+            worker.workedLastDay,
+            worker.workedPrevDay,
+            worker.isWorkedYesterday,
+            worker.hasWorkedYesterday,
+            worker.yesterdayWorked,
+            worker.yesterday,
+          ];
+
+    if (directCandidates.some((value) => value === true || value === 1 || value === "1" || value === "true")) return true;
+    if (directCandidates.some((value) => value === false || value === 0 || value === "0" || value === "false")) return false;
+
+    const logCandidates =
+      dayKey === "today"
+        ? [worker.todayWorklog, worker.worklogToday, worker.worklog?.today, worker.logs?.today]
+        : [worker.yesterdayWorklog, worker.worklogYesterday, worker.lastWorklog, worker.worklog?.yesterday, worker.logs?.yesterday];
+
+    const hasLogData = logCandidates.some((value) => value != null && value !== "");
+    if (hasLogData) return logCandidates.some((value) => hasWorkedFromWorklogEntry(value));
+    return null;
+  };
+
+  const renderPayrollOverlayBody = (overlay, entries, loadingMore = false) => {
+    const body = overlay?.querySelector(".eja-payroll-body");
+    if (!body) return;
+    body.innerHTML = buildPayrollHTML(entries);
+    if (!loadingMore) return;
+    const note = document.createElement("div");
+    note.className = "eja-payroll-muted";
+    note.style.marginTop = "12px";
+    note.textContent = "Doczytywanie nierozwiniętych sekcji…";
+    body.appendChild(note);
+  };
+
+  const closePayrollOverlay = () => {
+    payrollOverlayOpen = false;
+    updateJobsOverlayPause();
+    const backdrop = document.getElementById("eja-payroll-backdrop");
+    const overlay = document.getElementById("eja-payroll-overlay");
+    if (backdrop) {
+      backdrop.classList.remove("visible");
+      setTimeout(() => backdrop.remove(), 200);
+    }
+    if (overlay) {
+      overlay.classList.remove("visible");
+      setTimeout(() => overlay.remove(), 200);
+    }
+    if (document.__ejaPayrollEscHandler) {
+      document.removeEventListener("keydown", document.__ejaPayrollEscHandler);
+      document.__ejaPayrollEscHandler = null;
+    }
+  };
+
+  const openPayrollOverlay = async (triggerButton = null) => {
+    if (payrollOverlayOpen) {
+      clearActionButtonLoading(triggerButton);
+      return;
+    }
+    payrollOverlayOpen = true;
+    updateJobsOverlayPause();
+    ensurePayrollStyles();
+
+    const backdrop = document.createElement("div");
+    backdrop.id = "eja-payroll-backdrop";
+    backdrop.className = "eja-payroll-backdrop";
+    const overlay = document.createElement("div");
+    overlay.id = "eja-payroll-overlay";
+    overlay.className = "eja-payroll-overlay";
+    overlay.innerHTML = `
+      <div class="eja-payroll-header">
+        <h2>🏭 Produkcja i płace</h2>
+        <button class="eja-payroll-close" type="button">Zamknij</button>
+      </div>
+      <div class="eja-payroll-body">
+        <div class="eja-payroll-muted">Ładowanie produkcji i płac...</div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+    document.body.appendChild(overlay);
+
+    requestAnimationFrame(() => {
+      backdrop.classList.add("visible");
+      overlay.classList.add("visible");
+      clearActionButtonLoading(triggerButton);
+    });
+
+    overlay.querySelector(".eja-payroll-close")?.addEventListener("click", closePayrollOverlay);
+    overlay.querySelector(".eja-payroll-close")?.addEventListener("pointerdown", closePayrollOverlay);
+    backdrop.addEventListener("click", closePayrollOverlay);
+    backdrop.addEventListener("pointerdown", closePayrollOverlay);
+    document.__ejaPayrollEscHandler = (event) => {
+      if (event.key === "Escape") closePayrollOverlay();
+    };
+    document.addEventListener("keydown", document.__ejaPayrollEscHandler);
+
+    try {
+      const initialEntries = collectPayrollEntries(document);
+      renderPayrollOverlayBody(overlay, initialEntries, true);
+      await prefetchJobsCompaniesFromLazyUrls(document);
+      if (!payrollOverlayOpen) return;
+      const entries = collectPayrollEntries(document);
+      if (!payrollOverlayOpen) return;
+      await applyPayrollHistoryToEntries(entries);
+      if (!payrollOverlayOpen) return;
+      renderPayrollOverlayBody(overlay, entries, false);
+    } catch (e) {
+      const body = overlay.querySelector(".eja-payroll-body");
+      if (body) body.innerHTML = '<div class="eja-payroll-muted">Nie udało się załadować produkcji i płac.</div>';
+      console.warn("[EJA Payroll] Failed to build overlay:", e);
+      clearActionButtonLoading(triggerButton);
+    }
   };
 
   const openSalesSummaryOverlay = async (triggerButton = null) => {
@@ -722,6 +1229,162 @@
     });
   };
 
+  const getJobsCompanyLists = (root = document) =>
+    Array.from(root.querySelectorAll('.companyList[id^="companyList-"]'));
+
+  const hasCompanyRowsLoaded = (list) => Boolean(list?.querySelector('.hasBorder[data-id]'));
+
+  const toApiJobsUrl = (lazyUrl) => {
+    if (!lazyUrl) return "";
+    try {
+      const source = new URL(lazyUrl, location.origin);
+      return new URL(source.pathname + source.search, "https://api.eclesiar.com").toString();
+    } catch {
+      return "";
+    }
+  };
+
+  const normalizeJobsCompaniesCacheKey = (value = "") => String(value || "").trim().toLowerCase();
+
+  const registerRuntimeProductName = (id, name) => {
+    const normalizedId = String(id || "").trim();
+    const rawName = String(name || "").trim();
+    if (!normalizedId || !rawName) return;
+    const normalizedName = normalizeProductName(rawName);
+    if (!normalizedName) return;
+    if (EJA_DEBUG_PRODUCT_IDS) {
+      const staticName = PRODUCT_ID_TO_NAME[normalizedId] || RAW_ID_MAP[normalizedId] || "";
+      const normalizedStaticName = staticName ? normalizeProductName(staticName) : "";
+      if (normalizedStaticName && normalizedStaticName !== normalizedName) {
+        console.log("[EJA][PRODUCT_ID_MISMATCH]", {
+          id: normalizedId,
+          runtimeName: normalizedName,
+          staticName: normalizedStaticName,
+        });
+      }
+    }
+    productNameByIdRuntime.set(normalizedId, normalizedName);
+  };
+
+  const storeJobsCompaniesPayload = (cacheKey, payload) => {
+    const normalizedKey = normalizeJobsCompaniesCacheKey(cacheKey);
+    if (!normalizedKey) return;
+    const companies = Array.isArray(payload?.data?.companies) ? payload.data.companies : [];
+    companies.forEach((company) => {
+      registerRuntimeProductName(company?.type?.producedItemId, company?.type?.producedItemName);
+      registerRuntimeProductName(company?.type?.requestedItemId, company?.type?.requestedItemName);
+    });
+    jobsCompaniesCache.set(normalizedKey, { companies, inFlight: null, updatedAt: Date.now() });
+  };
+
+  const installJobsCompaniesApiInterceptors = () => {
+    if (!isJobsPage()) return;
+    if (window.__ejaJobsCompaniesInterceptorInstalled) return;
+    window.__ejaJobsCompaniesInterceptorInstalled = true;
+
+    const capturePayload = (url, payload) => {
+      const apiUrl = toApiJobsUrl(url);
+      const normalizedKey = normalizeJobsCompaniesCacheKey(apiUrl);
+      if (!normalizedKey) return;
+      storeJobsCompaniesPayload(normalizedKey, payload);
+    };
+
+    const nativeFetch = window.fetch;
+    if (typeof nativeFetch === "function") {
+      window.fetch = async (...args) => {
+        const response = await nativeFetch(...args);
+        try {
+          const requestUrl = typeof args[0] === "string" ? args[0] : args[0]?.url || "";
+          const apiUrl = toApiJobsUrl(requestUrl);
+          if (apiUrl && apiUrl.includes("/jobs/companies/fragment/")) {
+            const cloned = response.clone();
+            cloned
+              .json()
+              .then((payload) => capturePayload(apiUrl, payload))
+              .catch(() => {});
+          }
+        } catch {}
+        return response;
+      };
+    }
+
+    const nativeOpen = XMLHttpRequest.prototype.open;
+    const nativeSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      this.__ejaJobsCompaniesUrl = url;
+      return nativeOpen.call(this, method, url, ...rest);
+    };
+    XMLHttpRequest.prototype.send = function(...args) {
+      this.addEventListener("load", function() {
+        try {
+          const apiUrl = toApiJobsUrl(this.__ejaJobsCompaniesUrl || "");
+          const contentType = this.getResponseHeader("content-type") || "";
+          if (!apiUrl || !apiUrl.includes("/jobs/companies/fragment/") || !/application\/json/i.test(contentType)) return;
+          const payload = JSON.parse(this.responseText || "{}");
+          capturePayload(apiUrl, payload);
+        } catch {}
+      });
+      return nativeSend.apply(this, args);
+    };
+  };
+
+  const fetchJobsCompaniesFromLazyUrl = async (cacheKey, lazyUrl = "") => {
+    cacheKey = normalizeJobsCompaniesCacheKey(cacheKey || toApiJobsUrl(lazyUrl));
+    if (!cacheKey) return [];
+
+    const existing = jobsCompaniesCache.get(cacheKey);
+    if (existing?.inFlight) return existing.inFlight;
+    if (Array.isArray(existing?.companies) && existing.companies.length) return existing.companies;
+
+    const inFlight = (async () => {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 5000) {
+        const cached = jobsCompaniesCache.get(cacheKey)?.companies || [];
+        if (cached.length) return cached;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      return jobsCompaniesCache.get(cacheKey)?.companies || [];
+    })();
+
+    jobsCompaniesCache.set(cacheKey, {
+      companies: existing?.companies || [],
+      inFlight,
+      updatedAt: existing?.updatedAt || 0,
+    });
+    return inFlight;
+  };
+
+  const prefetchJobsCompaniesFromLazyUrls = async (root = document) => {
+    const containers = Array.from(root.querySelectorAll(".holdings-container"));
+    const targets = containers
+      .map((container) => {
+        const headerRow = container.querySelector(".row.closeHoldings[data-target]");
+        const companyList = container.querySelector('.companyList[id^="companyList-"]');
+        const lazyUrl = (companyList?.dataset?.lazyUrl || "").trim();
+        const apiUrl = toApiJobsUrl(lazyUrl);
+        if (!headerRow || !companyList || !apiUrl) return null;
+        return { headerRow, companyList, cacheKey: apiUrl };
+      })
+      .filter(Boolean);
+
+    if (!targets.length) return;
+
+    for (const target of targets) {
+      if (hasCompanyRowsLoaded(target.companyList)) continue;
+      if ((jobsCompaniesCache.get(target.cacheKey)?.companies || []).length) continue;
+
+      try {
+        target.headerRow.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      } catch {
+        try {
+          target.headerRow.click();
+        } catch {}
+      }
+
+      await fetchJobsCompaniesFromLazyUrl(target.cacheKey);
+    }
+  };
+
   const debounce = (fn, ms = 100) => {
     let t = null;
     return (...args) => {
@@ -730,7 +1393,6 @@
     };
   };
 
-  const isSellPage = () => location.pathname === "/market/sell";
   const isJobsPage = () => location.pathname.startsWith("/jobs");
   const isSettingsPage = () => location.pathname === "/user/settings";
   const isCoinAdvancedPage = () => /^\/market\/coin(?:\/\d+)?\/advanced(?:\/.*)?$/.test(location.pathname);
@@ -922,6 +1584,14 @@
     24: "Jedzenie",
   };
 
+  const getProductNameById = (id) => {
+    const key = String(id || "").trim();
+    if (!key) return "";
+    const runtimeName = productNameByIdRuntime.get(key);
+    if (runtimeName) return runtimeName;
+    return PRODUCT_ID_TO_NAME[key] || RAW_ID_MAP[key] || "";
+  };
+
   const USER_LANG = localStorage.getItem("ecPlus.language") === "pl" ? "pl" : "en";
   const PRODUCT_CANONICAL_PL = {
     zelazo: "Żelazo",
@@ -1027,6 +1697,510 @@
     }
   };
 
+  const getPayrollHistoryDateKey = (dateObj) => {
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${pad(dateObj.getDate())}/${pad(dateObj.getMonth() + 1)}/${dateObj.getFullYear()}`;
+  };
+
+  const parsePayrollHistoryDateKey = (dateKey) => {
+    const parts = String(dateKey || "").trim().split("/");
+    if (parts.length < 2) return null;
+    const day = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10);
+    const year = parts[2] ? parseInt(parts[2], 10) : new Date().getFullYear();
+    if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) return null;
+    const parsed = new Date(year, month - 1, day);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  };
+
+  const sortPayrollHistoryDateKeys = (a, b) => {
+    const aDate = parsePayrollHistoryDateKey(a);
+    const bDate = parsePayrollHistoryDateKey(b);
+    if (aDate && bDate) return aDate - bDate;
+    if (aDate) return 1;
+    if (bDate) return -1;
+    return String(a).localeCompare(String(b), "pl", { sensitivity: "base" });
+  };
+
+  const getPayrollHistoryRecentDates = (history, maxDays = PAYROLL_HISTORY_DAYS) => {
+    if (!history || typeof history !== "object") return [];
+    const allDates = Object.keys(history)
+      .filter((dateKey) => Boolean(parsePayrollHistoryDateKey(dateKey)))
+      .sort(sortPayrollHistoryDateKeys);
+    return allDates.slice(-Math.max(1, maxDays));
+  };
+
+  const extractHistoryAmount = (html) => {
+    if (!html) return 0;
+    const match = String(html).match(/item__amount-representation">([\d\s.,]+)/i);
+    if (!match) return 0;
+    return parseNumberValue(match[1]);
+  };
+
+  const extractHistoryProduct = (html) => {
+    if (!html) return "";
+    const match = String(html).match(/title="([^"]+)"/i);
+    return match ? match[1].trim() : "";
+  };
+
+  const getWorkedFlagFromHistoryRow = (row) => {
+    if (!row || typeof row !== "object") return null;
+    if (row.worked === true || row.worked === false) return row.worked;
+    const productionAmount = extractHistoryAmount(row.production);
+    const consumptionAmount = extractHistoryAmount(row.consumption);
+    if (productionAmount > 0 || consumptionAmount > 0) return true;
+    return null;
+  };
+
+  const parsePayrollHistoryRow = (row) => {
+    if (!row || typeof row !== "object") return null;
+
+    const productionAmount = extractHistoryAmount(row.production);
+    const consumptionAmount = extractHistoryAmount(row.consumption);
+    const workedFlag = getWorkedFlagFromHistoryRow(row);
+    const worked = workedFlag ?? (productionAmount > 0 || consumptionAmount > 0 ? true : null);
+    const productionLabel = productionAmount > 0 ? formatNumericValue(productionAmount) : "";
+    const consumptionLabel = consumptionAmount > 0 ? formatNumericValue(consumptionAmount) : "";
+
+    let label = "-";
+    if (worked === true) {
+      if (productionLabel && consumptionLabel) {
+        label = `${productionLabel} (${consumptionLabel})`;
+      } else if (productionLabel) {
+        label = productionLabel;
+      } else if (consumptionLabel) {
+        label = `(${consumptionLabel})`;
+      } else {
+        label = "Pracował";
+      }
+    }
+
+    return {
+      worked,
+      label,
+      productionAmount,
+      consumptionAmount,
+      productName: extractHistoryProduct(row.production) || extractHistoryProduct(row.consumption) || "",
+    };
+  };
+
+  const resolveWorkerTypeFromCached = (worker) => {
+    if (!worker || typeof worker !== "object") return "";
+    return String(worker.type?.id || worker.type || worker.workerType || worker.workerTypeId || "").trim();
+  };
+
+  const getPayrollHistoryCacheKey = (entry) => `${entry.companyId || ""}::${entry.workerId || ""}`;
+
+  const fetchWorkerHistory = async (entry) => {
+    if (!payrollApiToken) return null;
+    const workerId = String(entry.workerId || "").trim();
+    const companyId = String(entry.companyId || "").trim();
+    const workerType = String(entry.workerType || "").trim();
+    if (!workerId || !companyId || !workerType) return null;
+    try {
+      const response = await fetch("https://api.eclesiar.com/jobs/worker/history", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Bearer ${payrollApiToken}`,
+        },
+        body: new URLSearchParams({
+          worker_id: workerId,
+          company_id: companyId,
+          worker_type: workerType,
+        }),
+      });
+
+      if (!response.ok) throw new Error(`Payroll history HTTP ${response.status}`);
+      const json = await response.json();
+      const history = json?.data?.history;
+      if (!history || typeof history !== "object") return null;
+
+      const todayKey = getTodayKey();
+      const yesterdayDate = new Date();
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+      const yesterdayKey = getPayrollHistoryDateKey(yesterdayDate);
+
+      const daysByDate = {};
+      const recentDates = getPayrollHistoryRecentDates(history, PAYROLL_HISTORY_DAYS);
+      recentDates.forEach((dateKey) => {
+        const parsedRow = parsePayrollHistoryRow(history[dateKey]);
+        if (parsedRow) daysByDate[dateKey] = parsedRow;
+      });
+
+      const todayRow = daysByDate[todayKey] || parsePayrollHistoryRow(history[todayKey]);
+      const yesterdayRow = daysByDate[yesterdayKey] || parsePayrollHistoryRow(history[yesterdayKey]);
+      if (todayRow && !daysByDate[todayKey]) daysByDate[todayKey] = todayRow;
+      if (yesterdayRow && !daysByDate[yesterdayKey]) daysByDate[yesterdayKey] = yesterdayRow;
+
+      const normalizedDaysByDate = {};
+      Object.keys(daysByDate)
+        .sort(sortPayrollHistoryDateKeys)
+        .slice(-Math.max(1, PAYROLL_HISTORY_DAYS))
+        .forEach((dateKey) => {
+          normalizedDaysByDate[dateKey] = daysByDate[dateKey];
+        });
+
+      return {
+        workedToday: todayRow?.worked ?? null,
+        workedYesterday: yesterdayRow?.worked ?? null,
+        historyByDate: normalizedDaysByDate,
+      };
+    } catch (e) {
+      console.warn("[EJA Payroll] Failed to fetch worker history:", e);
+      return null;
+    }
+  };
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const applyPayrollHistoryToEntries = async (entries, batchSize = 5) => {
+    if (!payrollApiToken || !Array.isArray(entries) || entries.length === 0) return false;
+    const targets = entries.filter((entry) => entry.workerId && entry.companyId && entry.workerType);
+    if (!targets.length) return false;
+
+    for (let i = 0; i < targets.length; i += batchSize) {
+      const batch = targets.slice(i, i + batchSize);
+      const results = await Promise.all(
+        batch.map(async (entry) => {
+          const cacheKey = getPayrollHistoryCacheKey(entry);
+          if (payrollHistoryCache.has(cacheKey)) return { entry, history: payrollHistoryCache.get(cacheKey) };
+          const history = await fetchWorkerHistory(entry);
+          if (history) payrollHistoryCache.set(cacheKey, history);
+          return { entry, history };
+        }),
+      );
+
+      results.forEach(({ entry, history }) => {
+        if (!history) return;
+        if (history.workedToday !== null && history.workedToday !== undefined) entry.workedToday = history.workedToday;
+        if (history.workedYesterday !== null && history.workedYesterday !== undefined)
+          entry.workedYesterday = history.workedYesterday;
+        if (history.historyByDate && typeof history.historyByDate === "object") {
+          entry.historyByDate = history.historyByDate;
+        }
+      });
+
+      if (i + batchSize < targets.length) await sleep(150);
+    }
+
+    return true;
+  };
+
+  const formatTooltipWorklogDate = (dateObj) => {
+    if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) return "";
+    return `${String(dateObj.getDate()).padStart(2, "0")}/${String(dateObj.getMonth() + 1).padStart(2, "0")}`;
+  };
+
+  const decodeTooltipHtml = (value) => {
+    const raw = String(value || "");
+    if (!raw || (!raw.includes("&lt;") && !raw.includes("&gt;") && !raw.includes("&quot;"))) return raw;
+    const textarea = document.createElement("textarea");
+    textarea.innerHTML = raw;
+    return textarea.value;
+  };
+
+  const hasTooltipContentData = (node) => {
+    if (!node) return false;
+    const html = String(node.innerHTML || "").trim();
+    const text = String(node.textContent || "").trim();
+    return Boolean(html || text);
+  };
+
+  const getWorkedFlagFromTooltipRoot = (rootNode, dateObj) => {
+    if (!rootNode || !dateObj) return null;
+    const dateLabel = formatTooltipWorklogDate(dateObj);
+    if (!dateLabel) return null;
+
+    const tooltips = Array.from(rootNode.querySelectorAll?.(".c-tooltip") || []);
+    if (!tooltips.length) return null;
+
+    const matchingTooltip = tooltips.find((tooltip) => {
+      const label = tooltip.querySelector("span")?.textContent?.trim() || "";
+      return label === dateLabel;
+    });
+
+    if (!matchingTooltip) return null;
+    const tooltipContent = matchingTooltip.querySelector(".tooltip-content");
+    const hasContent = hasTooltipContentData(tooltipContent);
+    const isActive = matchingTooltip.classList.contains("active");
+    if (isActive) return hasContent || true;
+    if (hasContent) return true;
+    return false;
+  };
+
+  const getWorkedFlagFromTooltipHtml = (html, dateObj) => {
+    const raw = String(html || "").trim();
+    if (!raw || !/(c-tooltip|tooltip-content|item__amount-representation)/i.test(raw)) return null;
+    const decoded = decodeTooltipHtml(raw);
+    const container = document.createElement("div");
+    container.innerHTML = decoded;
+    return getWorkedFlagFromTooltipRoot(container, dateObj);
+  };
+
+  const getWorkedFlagFromTooltipAttributes = (node, dateObj) => {
+    const attributes = Array.from(node?.attributes || []);
+    for (const attr of attributes) {
+      const result = getWorkedFlagFromTooltipHtml(attr?.value || "", dateObj);
+      if (result !== null) return result;
+    }
+    return null;
+  };
+
+  const TOOLTIP_ATTR_SELECTOR = "[data-content], [data-original-title], [data-tooltip], [data-worklog], [data-bs-content], [data-tippy-content]";
+  const getWorkedFlagFromTooltipElement = (node, dateObj) => {
+    if (!node) return null;
+    const directDomResult = getWorkedFlagFromTooltipRoot(node, dateObj);
+    if (directDomResult !== null) return directDomResult;
+
+    const attributeResult = getWorkedFlagFromTooltipAttributes(node, dateObj);
+    if (attributeResult !== null) return attributeResult;
+
+    const candidates = Array.from(node.querySelectorAll?.(TOOLTIP_ATTR_SELECTOR) || []);
+    for (const candidate of candidates) {
+      const candidateResult = getWorkedFlagFromTooltipAttributes(candidate, dateObj);
+      if (candidateResult !== null) return candidateResult;
+    }
+
+    const htmlResult = getWorkedFlagFromTooltipHtml(node.innerHTML || "", dateObj);
+    if (htmlResult !== null) return htmlResult;
+    return null;
+  };
+
+  const getEmployeeTotals = (employeeEl) => {
+    if (!employeeEl) return null;
+    const totalDays = Number.parseInt(employeeEl.getAttribute("data-totaldays") || "", 10);
+    const totalWorkdays = Number.parseInt(employeeEl.getAttribute("data-totalworkdays") || "", 10);
+    if (!Number.isFinite(totalDays) || !Number.isFinite(totalWorkdays)) return null;
+    return { totalDays, totalWorkdays, diff: totalDays - totalWorkdays };
+  };
+
+  const getEmployeeWorkedTodayFromDom = (employeeEl) => {
+    if (!employeeEl) return null;
+    if (employeeEl.querySelector(".fa-check, .fa-check-circle, .fa-check-square")) return true;
+    if (employeeEl.querySelector(".fa-times, .fa-xmark, .fa-ban")) return false;
+
+    const totals = getEmployeeTotals(employeeEl);
+    if (!totals) return null;
+    return false;
+  };
+
+  const getEmployeeWorkedYesterdayFromTotals = (employeeEl, workedToday) => {
+    const totals = getEmployeeTotals(employeeEl);
+    if (!totals) return null;
+    const { diff } = totals;
+    if (diff === 0) return true;
+    if (diff === 1) {
+      if (workedToday === true) return false;
+      if (workedToday === false) return true;
+    }
+    return null;
+  };
+
+  const getWorkedFlagFromEmployeeTooltip = (employeeEl, dateObj, workerId = "", companyRow = null) => {
+    if (!employeeEl || !dateObj) return null;
+
+    const directResult = getWorkedFlagFromTooltipElement(employeeEl, dateObj);
+    if (directResult !== null) return directResult;
+
+    const workerKey = String(workerId || "").trim();
+    const row = companyRow || employeeEl.closest(".hasBorder[data-id]");
+    if (workerKey && row) {
+      const scopedNodes = Array.from(
+        row.querySelectorAll(`[data-userid="${workerKey}"], [data-id="${workerKey}"], [data-worker-id="${workerKey}"]`),
+      ).filter((node) => node && node !== employeeEl);
+      for (const node of scopedNodes) {
+        const result = getWorkedFlagFromTooltipElement(node, dateObj);
+        if (result !== null) return result;
+      }
+    }
+
+    if (row && row.querySelectorAll(".employees_list .employee").length <= 1) {
+      const rowResult = getWorkedFlagFromTooltipElement(row, dateObj);
+      if (rowResult !== null) return rowResult;
+    }
+
+    return null;
+  };
+
+  const collectPayrollEntries = (root = document) => {
+    const entries = [];
+    const entryKeys = new Set();
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const cachedWorkersByCompany = new Map();
+
+    jobsCompaniesCache.forEach((payload) => {
+      const companies = Array.isArray(payload?.companies) ? payload.companies : [];
+      companies.forEach((company) => {
+        const companyId = String(company?.id || "").trim();
+        if (!companyId) return;
+        const workers = Array.isArray(company?.workers) ? company.workers : [];
+        if (!workers.length) return;
+        const bucket = cachedWorkersByCompany.get(companyId) || [];
+        bucket.push(...workers);
+        cachedWorkersByCompany.set(companyId, bucket);
+      });
+    });
+
+    const normalizeWorkerName = (value = "") => String(value || "").trim().toLowerCase();
+    const findCachedWorker = (companyId, workerId, workerName, wage, currencyCode) => {
+      const workers = cachedWorkersByCompany.get(String(companyId || "").trim()) || [];
+      if (!workers.length) return null;
+
+      const normalizedWorkerId = String(workerId || "").trim();
+      if (normalizedWorkerId) {
+        const byId = workers.find((worker) => String(worker?.id || worker?.userId || "").trim() === normalizedWorkerId);
+        if (byId) return byId;
+      }
+
+      const normalizedName = normalizeWorkerName(workerName);
+      const normalizedCurrency = String(currencyCode || "").trim().toUpperCase();
+      const byName = workers.find((worker) => {
+        const workerCurrency = String(worker?.currencyName || worker?.currencyCode || "").trim().toUpperCase();
+        const workerWage = parseFloat(worker?.wage || "0") || 0;
+        return (
+          normalizeWorkerName(worker?.name || worker?.fullName || worker?.username || "") === normalizedName &&
+          (!normalizedCurrency || workerCurrency === normalizedCurrency) &&
+          (!wage || workerWage === wage)
+        );
+      });
+      return byName || null;
+    };
+
+    const pushPayrollEntry = (entry) => {
+      const key = [entry.section, entry.companyId, entry.workerId || entry.workerName, entry.currencyCode, entry.wage].join("::");
+      if (entryKeys.has(key)) return;
+      entryKeys.add(key);
+      entries.push(entry);
+    };
+
+    const containers = root.querySelectorAll(".holdings-container");
+    containers.forEach((container) => {
+      const headerRow = container.querySelector(".row.closeHoldings[data-target]");
+      if (!headerRow) return;
+
+      const label = headerRow.querySelector(".holdings-description span");
+      let sectionName = label ? (label.dataset.ejaOriginalLabel || label.textContent || "").trim() : "Firmy";
+      sectionName = sectionName.replace(/\(\d+.*$/, "").trim();
+
+      const targetKey = (headerRow.getAttribute("data-target") || "").trim();
+      if (!targetKey) return;
+      const targetListByKey = container.querySelector(`.${targetKey}`) || container.querySelector(`#${targetKey}`);
+      const directCompanyList = container.querySelector('.companyList[id^="companyList-"]');
+      const targetList =
+        targetListByKey && targetListByKey.querySelector(".hasBorder[data-id]")
+          ? targetListByKey
+          : directCompanyList || targetListByKey;
+
+      if (!targetList) return;
+      const companyRows = targetList.querySelectorAll(".hasBorder[data-id]");
+
+      companyRows.forEach((row) => {
+        const companyId = row.getAttribute("data-id") || "";
+        const companyName = row.querySelector(".company-name-h5 span, .company-name, h5")?.textContent?.trim() || "Firma";
+        const employees = row.querySelectorAll(".employees_list .employee");
+
+        employees.forEach((emp, index) => {
+          const workerName =
+            emp.getAttribute("data-name") ||
+            emp.getAttribute("title") ||
+            emp.querySelector("img")?.getAttribute("alt") ||
+            emp.textContent?.trim() ||
+            `Pracownik ${index + 1}`;
+          const workerId = emp.getAttribute("data-id") || emp.getAttribute("data-userid") || "";
+          const wage = parseFloat(emp.getAttribute("data-wage") || "0") || 0;
+          const currencyCode = (emp.getAttribute("data-currencyname") || emp.getAttribute("data-currencycode") || "").trim();
+          const currencyIcon = emp.getAttribute("data-currencyavatar") || "";
+          const workerType =
+            emp.getAttribute("data-workertype") || emp.getAttribute("data-workertypeid") || emp.getAttribute("data-worker-type") || "";
+          const worklogRaw = emp.getAttribute("data-worklog") || "";
+          const todayEntry = getTodayWorklogEntry(worklogRaw);
+          const yesterdayEntry = getWorklogEntryByDate(worklogRaw, yesterdayDate);
+          const cachedWorker = findCachedWorker(companyId, workerId, workerName, wage, currencyCode);
+          const cachedWorkerType = resolveWorkerTypeFromCached(cachedWorker);
+          const todayDomFlag = getEmployeeWorkedTodayFromDom(emp);
+          const tooltipWorkedToday = getWorkedFlagFromEmployeeTooltip(emp, new Date(), workerId, row);
+          const rawWorkedToday = worklogRaw ? hasWorkedFromWorklogEntry(todayEntry?.[1]) : null;
+          const apiWorkedToday = cachedWorker ? getWorkerWorkedFlag(cachedWorker, "today") : null;
+          const workedToday = todayDomFlag ?? tooltipWorkedToday ?? rawWorkedToday ?? apiWorkedToday;
+
+          const tooltipWorkedYesterday = getWorkedFlagFromEmployeeTooltip(emp, yesterdayDate, workerId, row);
+          const rawWorkedYesterday = worklogRaw ? hasWorkedFromWorklogEntry(yesterdayEntry?.[1]) : null;
+          const apiWorkedYesterday = cachedWorker ? getWorkerWorkedFlag(cachedWorker, "yesterday") : null;
+          const yesterdayTotalsFlag = getEmployeeWorkedYesterdayFromTotals(emp, workedToday);
+          const workedYesterday = yesterdayTotalsFlag ?? tooltipWorkedYesterday ?? rawWorkedYesterday ?? apiWorkedYesterday;
+
+          pushPayrollEntry({
+            section: sectionName,
+            companyId,
+            companyName,
+            workerId,
+            workerName: workerName.trim() || `Pracownik ${index + 1}`,
+            wage,
+            currencyCode,
+            currencyIcon,
+            workedToday,
+            workedYesterday,
+            workerType: String(workerType || cachedWorkerType || "").trim(),
+            domEmployee: emp,
+          });
+        });
+      });
+
+      if (companyRows.length) return;
+
+      const lazyUrl = (directCompanyList?.dataset?.lazyUrl || "").trim();
+      const cacheKey = normalizeJobsCompaniesCacheKey(toApiJobsUrl(lazyUrl));
+      if (!cacheKey) return;
+
+      const fallbackCompanies = jobsCompaniesCache.get(cacheKey)?.companies || [];
+      fallbackCompanies.forEach((company) => {
+        const companyId = String(company?.id || "").trim();
+        const companyName = (company?.name || "Firma").trim() || "Firma";
+        const workers = Array.isArray(company?.workers) ? company.workers : [];
+
+        workers.forEach((worker, index) => {
+          const workerName = (worker?.name || worker?.fullName || worker?.username || "").trim() || `Pracownik ${index + 1}`;
+          const workerId = String(worker?.id || worker?.userId || "").trim();
+          const wage = parseFloat(worker?.wage || "0") || 0;
+          const currencyCode = (worker?.currencyName || worker?.currencyCode || "").trim();
+          const currencyIcon = worker?.currencyAvatar || "";
+          const workerType = resolveWorkerTypeFromCached(worker);
+          const workedToday = getWorkerWorkedFlag(worker, "today");
+          const workedYesterday = getWorkerWorkedFlag(worker, "yesterday");
+
+          pushPayrollEntry({
+            section: sectionName,
+            companyId,
+            companyName,
+            workerId,
+            workerName,
+            wage,
+            currencyCode,
+            currencyIcon,
+            workedToday,
+            workedYesterday,
+            workerType,
+            domEmployee: null,
+          });
+        });
+      });
+    });
+
+    entries.sort((a, b) => {
+      const sectionCompare = a.section.localeCompare(b.section, "pl", { sensitivity: "base" });
+      if (sectionCompare !== 0) return sectionCompare;
+      const companyCompare = a.companyName.localeCompare(b.companyName, "pl", { sensitivity: "base" });
+      if (companyCompare !== 0) return companyCompare;
+      return a.workerName.localeCompare(b.workerName, "pl", { sensitivity: "base" });
+    });
+
+    return entries;
+  };
+
   const getWorklogEntryByDate = (worklogRaw, dateObj) => {
     const worklog = parseWorklogRaw(worklogRaw);
     if (!worklog) return null;
@@ -1044,6 +2218,50 @@
       return keyDay === day && keyMonth === month;
     });
     return entry || null;
+  };
+
+  const getBestWorkerProductionFromHistory = (historyByDate) => {
+    if (!historyByDate || typeof historyByDate !== "object") return null;
+
+    let bestAmount = 0;
+    let bestProductName = "";
+    Object.values(historyByDate).forEach((dayInfo) => {
+      const amount = Number(dayInfo?.productionAmount || 0);
+      if (!Number.isFinite(amount) || amount <= 0) return;
+      if (amount >= bestAmount) {
+        bestAmount = amount;
+        bestProductName = String(dayInfo?.productName || "").trim();
+      }
+    });
+
+    if (bestAmount <= 0) return null;
+    return {
+      amount: bestAmount,
+      productName: bestProductName,
+    };
+  };
+
+  const buildDashboardWorkerCapacityLookup = async (root = document) => {
+    const capacityByWorker = new Map();
+    if (!payrollApiToken) return capacityByWorker;
+
+    const entries = collectPayrollEntries(root);
+    if (!entries.length) return capacityByWorker;
+
+    await applyPayrollHistoryToEntries(entries);
+
+    entries.forEach((entry) => {
+      const companyId = String(entry?.companyId || "").trim();
+      const workerId = String(entry?.workerId || "").trim();
+      if (!companyId || !workerId) return;
+
+      const bestProduction = getBestWorkerProductionFromHistory(entry?.historyByDate);
+      if (!bestProduction) return;
+
+      capacityByWorker.set(`${companyId}::${workerId}`, bestProduction);
+    });
+
+    return capacityByWorker;
   };
 
   const getTodayWorklogEntry = (worklogRaw) => {
@@ -1161,11 +2379,12 @@
     return currencies;
   };
 
-    const collectDashboardCompanyData = (root = document, yesterday = null) => {
+    const collectDashboardCompanyData = (root = document, yesterday = null, workerCapacityByKey = null) => {
     const companies = [];
     const containers = root.querySelectorAll(".holdings-container");
     const yesterdayDate = new Date();
     yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const companyIds = new Set();
 
     const parseProductionEntry = (entryData, companyQuality, targetMap) => {
       if (!entryData || !entryData.production) return;
@@ -1201,6 +2420,82 @@
       } catch {}
     };
 
+    const upsertProductionValue = (targetMap, productName, amount, icon, capacity = null) => {
+      const normalizedName = normalizeProductName(productName);
+      if (!normalizedName || amount <= 0) return;
+      if (!targetMap[normalizedName]) targetMap[normalizedName] = { amount: 0, icon: icon || "" };
+      targetMap[normalizedName].amount += amount;
+      if (!targetMap[normalizedName].icon && icon) targetMap[normalizedName].icon = icon;
+      if (capacity != null) {
+        targetMap[normalizedName].capacity = Math.max(targetMap[normalizedName].capacity || 0, capacity || 0);
+      }
+    };
+
+    const cachedCompaniesById = new Map();
+    jobsCompaniesCache.forEach((payload) => {
+      const companiesList = Array.isArray(payload?.companies) ? payload.companies : [];
+      companiesList.forEach((company) => {
+        const id = String(company?.id || "").trim();
+        if (!id) return;
+        if (!cachedCompaniesById.has(id)) cachedCompaniesById.set(id, company);
+      });
+    });
+
+    const parseProductionFromRowDataset = (row, targetMap, cachedCompany = null) => {
+      const managerToggle = row.querySelector(".work-as-manager-toggle");
+      if (!managerToggle) return;
+
+      const producedAmount = parseFloat(managerToggle.getAttribute("data-producedamount") || "0") || 0;
+      const producedId =
+        String(cachedCompany?.type?.producedItemId || "").trim() || (managerToggle.getAttribute("data-producedid") || "").trim();
+      const producedAvatar = cachedCompany?.type?.producedItemAvatar || managerToggle.getAttribute("data-producedavatar") || "";
+      const requestedAmount = parseFloat(managerToggle.getAttribute("data-requestedamount") || "0") || 0;
+      const requestedId =
+        String(cachedCompany?.type?.requestedItemId || "").trim() || (managerToggle.getAttribute("data-requestedid") || "").trim();
+      const requestedAvatar = cachedCompany?.type?.requestedItemAvatar || managerToggle.getAttribute("data-requestedavatar") || "";
+
+      const producedName = getProductNameById(producedId);
+      const requestedName = getProductNameById(requestedId);
+
+      if (producedName && producedAmount > 0) {
+        upsertProductionValue(targetMap, producedName, producedAmount, producedAvatar, producedAmount);
+      }
+
+      if (requestedName && requestedAmount > 0) {
+        const normalizedRequested = normalizeProductName(requestedName);
+        if (!targetMap[normalizedRequested]) {
+          targetMap[normalizedRequested] = { amount: 0, icon: requestedAvatar || "" };
+        }
+        if (!targetMap[normalizedRequested].icon && requestedAvatar) {
+          targetMap[normalizedRequested].icon = requestedAvatar;
+        }
+      }
+    };
+
+    const pushCompanyRecord = ({ id, name, type, quality, section, employeeCount, wages, wagesUnpaidToday, productions }) => {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId || companyIds.has(normalizedId)) return;
+
+      Object.keys(productions).forEach((prodName) => {
+        const todayAmt = productions[prodName].amount || 0;
+        const capAmt = productions[prodName].capacity || 0;
+        productions[prodName].capacity = Math.max(todayAmt, capAmt);
+      });
+
+      companies.push({
+        id: normalizedId,
+        name,
+        type,
+        quality,
+        section,
+        employeeCount,
+        wages,
+        wagesUnpaidToday,
+        productions,
+      });
+      companyIds.add(normalizedId);
+    };
+
     containers.forEach((container) => {
       const headerRow = container.querySelector(".row.closeHoldings[data-target]");
       if (!headerRow) return;
@@ -1210,28 +2505,42 @@
 
       const targetKey = (headerRow.getAttribute("data-target") || "").trim();
       if (!targetKey) return;
-      const targetList = container.querySelector(`.${targetKey}`) || container.querySelector(`#${targetKey}`);
+      const targetListByKey = container.querySelector(`.${targetKey}`) || container.querySelector(`#${targetKey}`);
+      const directCompanyList = container.querySelector('.companyList[id^="companyList-"]');
+      const targetList =
+        targetListByKey && targetListByKey.querySelector(".hasBorder[data-id]")
+          ? targetListByKey
+          : directCompanyList || targetListByKey;
       if (!targetList) return;
       const companyRows = targetList.querySelectorAll(".hasBorder[data-id]");
       companyRows.forEach((row) => {
         const companyId = row.getAttribute("data-id") || "";
+        const cachedCompany = cachedCompaniesById.get(String(companyId || "").trim()) || null;
         const companyName = row.querySelector(".company-name-h5 span, .company-name, h5")?.textContent?.trim() || "Firma";
         const companyType = (row.getAttribute("data-type") || "").trim();
         const companyQuality = parseInt(row.getAttribute("data-quality"), 10) || 0;
         const employees = row.querySelectorAll(".employees_list .employee");
-        const employeeCount = employees.length;
+        const managerToggle = row.querySelector(".work-as-manager-toggle");
+        const rowProducedId =
+          String(cachedCompany?.type?.producedItemId || "").trim() || (managerToggle?.getAttribute("data-producedid") || "").trim();
+        const rowProducedName = getProductNameById(rowProducedId);
+        const rowProducedIcon = cachedCompany?.type?.producedItemAvatar || managerToggle?.getAttribute("data-producedavatar") || "";
+        const employeeCount = Math.max(employees.length, parseInt(row.getAttribute("data-employees"), 10) || 0);
         const wages = {};
         const wagesUnpaidToday = {};
         const productions = {};
         const capacityFromEmployees = {};
 
+        parseProductionFromRowDataset(row, productions, cachedCompany);
+
         employees.forEach((emp) => {
+          const workerId = String(emp.getAttribute("data-id") || emp.getAttribute("data-userid") || "").trim();
           const wage = parseFloat(emp.getAttribute("data-wage") || "0") || 0;
           const currencyCode = emp.getAttribute("data-currencyname") || emp.getAttribute("data-currencycode") || "";
           const currencyIcon = emp.getAttribute("data-currencyavatar") || "";
           const worklogRaw = emp.getAttribute("data-worklog") || "";
           const todayEntry = getTodayWorklogEntry(worklogRaw);
-          const workedToday = Boolean(todayEntry && todayEntry[1]);
+          const workedToday = hasWorkedFromWorklogEntry(todayEntry?.[1]);
 
           if (wage > 0 && currencyCode) {
             if (!wages[currencyCode]) wages[currencyCode] = { amount: 0, icon: currencyIcon };
@@ -1242,12 +2551,12 @@
             }
           }
 
-          if (todayEntry && todayEntry[1]) {
+          if (hasWorkedFromWorklogEntry(todayEntry?.[1])) {
             parseProductionEntry(todayEntry[1], companyQuality, productions);
           }
 
           const employeeCapacity = {};
-          if (todayEntry && todayEntry[1]) {
+          if (hasWorkedFromWorklogEntry(todayEntry?.[1])) {
             parseProductionEntry(todayEntry[1], companyQuality, employeeCapacity);
           }
           if (Object.keys(employeeCapacity).length === 0) {
@@ -1256,6 +2565,21 @@
               parseProductionEntry(yEntry[1], companyQuality, employeeCapacity);
             }
           }
+
+          if (Object.keys(employeeCapacity).length === 0 && workerCapacityByKey instanceof Map && workerId) {
+            const historyCapacity = workerCapacityByKey.get(`${String(companyId || "").trim()}::${workerId}`);
+            if (historyCapacity && historyCapacity.amount > 0) {
+              const capacityProductName = rowProducedName || historyCapacity.productName || "";
+              const normalizedCapacityName = normalizeProductName(capacityProductName);
+              if (normalizedCapacityName) {
+                employeeCapacity[normalizedCapacityName] = {
+                  amount: historyCapacity.amount,
+                  icon: rowProducedIcon || "",
+                };
+              }
+            }
+          }
+
           Object.entries(employeeCapacity).forEach(([name, data]) => {
             if (!capacityFromEmployees[name]) capacityFromEmployees[name] = { amount: 0, icon: data.icon || "" };
             capacityFromEmployees[name].amount += data.amount || 0;
@@ -1281,13 +2605,89 @@
           });
         }
 
-        Object.keys(productions).forEach((name) => {
-          const todayAmt = productions[name].amount || 0;
-          const capAmt = productions[name].capacity || 0;
-          productions[name].capacity = Math.max(todayAmt, capAmt);
+        pushCompanyRecord({
+          id: companyId,
+          name: companyName,
+          type: companyType,
+          quality: companyQuality,
+          section: sectionName,
+          employeeCount,
+          wages,
+          wagesUnpaidToday,
+          productions,
+        });
+      });
+
+      if (companyRows.length) return;
+
+      const lazyUrl = (directCompanyList?.dataset?.lazyUrl || "").trim();
+      const cacheKey = normalizeJobsCompaniesCacheKey(toApiJobsUrl(lazyUrl));
+      if (!cacheKey) return;
+
+      const fallbackCompanies = jobsCompaniesCache.get(cacheKey)?.companies || [];
+      fallbackCompanies.forEach((company) => {
+        const companyId = String(company?.id || "").trim();
+        if (!companyId) return;
+
+        const companyName = (company?.name || "Firma").trim() || "Firma";
+        const companyType = (company?.type?.name || company?.type || "").trim();
+        const companyQuality = parseInt(company?.type?.quality, 10) || 0;
+        const workers = Array.isArray(company?.workers) ? company.workers : [];
+        const employeeCount = workers.length || parseInt(company?.employeesCount, 10) || parseInt(company?.employeeCount, 10) || 0;
+        const wages = {};
+        const wagesUnpaidToday = {};
+        const productions = {};
+
+        workers.forEach((worker) => {
+          const wage = parseFloat(worker?.wage || "0") || 0;
+          const currencyCode = (worker?.currencyName || "").trim();
+          const currencyIcon = worker?.currencyAvatar || "";
+          const workedToday = Boolean(worker?.workedToday);
+
+          if (wage > 0 && currencyCode) {
+            if (!wages[currencyCode]) wages[currencyCode] = { amount: 0, icon: currencyIcon };
+            wages[currencyCode].amount += wage;
+            if (!workedToday) {
+              if (!wagesUnpaidToday[currencyCode]) wagesUnpaidToday[currencyCode] = { amount: 0, icon: currencyIcon };
+              wagesUnpaidToday[currencyCode].amount += wage;
+            }
+          }
         });
 
-        companies.push({
+        const producedName = getProductNameById(company?.type?.producedItemId);
+        const producedIcon = company?.type?.producedItemAvatar || "";
+        const producedAmount = parseFloat(company?.production?.produced || company?.production?.originalProduced || 0) || 0;
+        const producedCapacity = parseFloat(company?.production?.originalProduced || company?.production?.produced || 0) || 0;
+        if (producedName && producedAmount > 0) {
+          upsertProductionValue(productions, producedName, producedAmount, producedIcon, producedCapacity);
+        } else if (producedName && producedCapacity > 0) {
+          const normalizedProduced = normalizeProductName(producedName);
+          if (!productions[normalizedProduced]) productions[normalizedProduced] = { amount: 0, icon: producedIcon || "" };
+          productions[normalizedProduced].capacity = Math.max(productions[normalizedProduced].capacity || 0, producedCapacity);
+        }
+
+        const requestedName = getProductNameById(company?.type?.requestedItemId);
+        const requestedIcon = company?.type?.requestedItemAvatar || "";
+        const requestedAmount = parseFloat(company?.production?.requestedAmount || company?.type?.requestedAmount || 0) || 0;
+        if (requestedName && requestedAmount > 0) {
+          const normalizedRequested = normalizeProductName(requestedName);
+          if (!productions[normalizedRequested]) productions[normalizedRequested] = { amount: 0, icon: requestedIcon || "" };
+          if (!productions[normalizedRequested].icon && requestedIcon) productions[normalizedRequested].icon = requestedIcon;
+        }
+
+        const yesterdayCompany = yesterday?.companies?.find((c) => c.id === companyId);
+        if (yesterdayCompany && yesterdayCompany.productions) {
+          Object.entries(yesterdayCompany.productions).forEach(([name, data]) => {
+            const normalizedName = normalizeProductName(name);
+            if (!productions[normalizedName]) productions[normalizedName] = { amount: 0, icon: data.icon };
+            productions[normalizedName].capacity = Math.max(
+              productions[normalizedName].capacity || 0,
+              data.capacity || data.amount || 0,
+            );
+          });
+        }
+
+        pushCompanyRecord({
           id: companyId,
           name: companyName,
           type: companyType,
@@ -1314,7 +2714,7 @@
 
       // Fallback: Check ID if name is empty
       if (!name) {
-        if (id && RAW_ID_MAP[id]) name = RAW_ID_MAP[id];
+        name = getProductNameById(id);
       }
 
       // Try image alt (Holding Modal/Page)
@@ -1937,6 +3337,23 @@
           if (row) row.classList.toggle("is-done", isDone);
         });
       }
+      if (!overlay.__ejaJobOfferBound) {
+        overlay.__ejaJobOfferBound = true;
+        overlay.addEventListener("click", (event) => {
+          const target = event.target;
+          if (!target || !target.matches || !target.matches("[data-eja-open-joboffers]")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const companyId = target.getAttribute("data-eja-open-joboffers") || "";
+          if (!companyId) return;
+          const trigger = document.querySelector(`.joboffers_modal_trigger[data-companyid="${companyId}"]`);
+          if (trigger) {
+            trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+          } else {
+            console.warn("[EJA Dashboard] Job offer trigger not found for company:", companyId);
+          }
+        });
+      }
     };
 
     bindDashboardEvents();
@@ -1951,7 +3368,16 @@
       // Collect initial data
       const yesterday = await getDailySnapshot(getYesterdayDateKey());
       if (!dashboardOverlayOpen) return;
-      const companies = collectDashboardCompanyData(document, yesterday);
+      await prefetchJobsCompaniesFromLazyUrls(document);
+      if (!dashboardOverlayOpen) return;
+      let workerCapacityByKey = new Map();
+      try {
+        workerCapacityByKey = await buildDashboardWorkerCapacityLookup(document);
+      } catch (e) {
+        console.warn("[EJA Dashboard] Failed to build worker capacity lookup:", e);
+      }
+      if (!dashboardOverlayOpen) return;
+      const companies = collectDashboardCompanyData(document, yesterday, workerCapacityByKey);
       const userCurrencies = parseUserCurrencies();
       let userStorage = {};
       try {
@@ -2270,42 +3696,6 @@
           )
           .join("") || '<span style="color:#64748b">—</span>';
 
-      // Company rows for this section
-      const companyRows = sectionCompanies
-        .map((c) => {
-          const yesterdayCompany = yesterday?.companies?.find((yc) => yc.id === c.id);
-          const empYesterday = yesterdayCompany?.employeeCount || null;
-          const empDiff = empYesterday !== null ? c.employeeCount - empYesterday : null;
-          const trendClass =
-            empDiff === null ? "" : empDiff > 0 ? "eja-trend-up" : empDiff < 0 ? "eja-trend-down" : "eja-trend-same";
-          const trendText =
-            empDiff === null ? "" : empDiff > 0 ? ` (+${empDiff})` : empDiff < 0 ? ` (${empDiff})` : " (=)";
-          const wagesChips =
-            Object.entries(c.wages)
-              .map(
-                ([code, data]) =>
-                  `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${data.amount.toFixed(3)} ${code}</span>`,
-              )
-              .join("") || "—";
-          const prodChips =
-            Object.entries(c.productions)
-              .map(([name, data]) => {
-                const normName = normalizeProductName(name);
-                const cap = data.capacity || data.amount;
-                // Show "Amount / Cap" if strictly less, otherwise just Amount
-                const valText = data.amount < cap ? `${data.amount}/${cap}` : `${data.amount}`;
-                return `<span class="eja-chip">${data.icon ? `<img src="${data.icon}">` : ""}${valText} ${normName}</span>`;
-              })
-              .join("") || '<span style="color:#64748b">—</span>';
-          return `<tr>
-            <td><strong>${c.name}</strong>${c.quality ? ` Q${c.quality}` : ""}<br><small style="color:#64748b">${c.type}</small></td>
-            <td><span class="${trendClass}">👥 ${c.employeeCount}${trendText}</span></td>
-            <td>${wagesChips}</td>
-            <td>${prodChips}</td>
-          </tr>`;
-        })
-        .join("");
-
       const sectionIcon = isPersonalSectionName(sectionName) ? "👤" : "🏢";
       const empDisplay = yesterday
         ? `${sectionEmployees} <span style="font-size:11px;color:#64748b;">(Wczoraj: ${yesterdayEmployees}, <span class="${empTrend > 0 ? "eja-trend-up" : empTrend < 0 ? "eja-trend-down" : "eja-trend-same"}">${empTrend > 0 ? "+" : ""}${empTrend}</span>)</span>`
@@ -2319,16 +3709,6 @@
             <div><strong style="color:#94a3b8;font-size:11px;">KOSZTY/DZIEN:</strong> ${sectionWagesChips}</div>
             <div><strong style="color:#94a3b8;font-size:11px;">PRODUKCJA (MOZLIWOSCI):</strong> ${sectionProdChips}</div>
           </div>
-
-          <details style="margin-top:8px;">
-            <summary style="cursor:pointer;font-size:12px;color:#60a5fa;">Pokaz firmy (${sectionCompanies.length})</summary>
-            <table class="eja-company-table" style="margin-top:8px;">
-              <thead>
-                <tr><th>Firma</th><th>Pracownicy</th><th>Koszty</th><th>Produkcja</th></tr>
-              </thead>
-              <tbody>${companyRows}</tbody>
-            </table>
-          </details>
           ${renderRawMaterialsSection(sectionName, sectionCompanies, holdingsData, userStorage)}
           ${holdingInfoHTML}
         </div>
@@ -2415,6 +3795,7 @@
             priority: "high",
             text: `<b>${c.name}</b> (${c.section}): Odeszło <b>${diff}</b> pracow.`,
             link: `/business/${c.id}`,
+            jobOfferCompanyId: String(c.id || ""),
             actionId: `employee:${c.id}`,
           });
         }
@@ -2428,7 +3809,8 @@
           type: "currency",
           priority: "critical",
           text: `Brakuje <b>${Math.abs(data.diff).toFixed(3)} ${code}</b> na koncie prywatnym.`,
-          link: "https://eclesiar.com/market/coin/advanced",
+          link: "/jobs",
+          marketLink: "https://eclesiar.com/market/coin/advanced",
           actionId: `currency:${code}`,
         });
       }
@@ -2491,6 +3873,7 @@
                     </div>
                     <div style="display:flex;align-items:center;gap:6px;">
                       <a href="${item.link}" target="_blank" class="eja-action-btn">Zarzadzaj -></a>
+                      ${item.jobOfferCompanyId ? `<button type="button" class="eja-action-btn" data-eja-open-joboffers="${item.jobOfferCompanyId}">Oferta pracy -></button>` : ""}
                       ${item.marketLink ? `<a href="${item.marketLink}" target="_blank" class="eja-action-btn">Rynek walut -></a>` : ""}
                     </div>
                 </div>
@@ -2629,45 +4012,6 @@
     `;
   };
 
-  const parseEntity = (val) => {
-    if (!val || val === "account") return { scope: "self" };
-    if (val === "public") return { scope: "public" };
-    if (val === "mu" || val.startsWith("mu")) return { scope: "mu" };
-    if (val.startsWith("holding-")) {
-      const parts = val.split("-");
-      const id = parts[1];
-      if (id && /^\d+$/.test(id)) return { scope: "holding", holdingid: id };
-    }
-    return { scope: "self" };
-  };
-
-  // Inner versions use CACHE_TTL_MS directly (no false expiry)
-  function cacheHoldings(root) {
-    try {
-      const select = (root || document).querySelector("#inventory_selector");
-      if (!select) return;
-      const options = Array.from(select.querySelectorAll("option"))
-        .map((o) => ({
-          value: o.value,
-          text: (o.textContent || "").trim(),
-          icon: o.getAttribute("data-iconurl") || "",
-        }))
-        .filter((o) => o.value && o.value.startsWith("holding-"))
-        .map((o) => ({
-          id: o.value.split("-")[1],
-          name: o.text.replace(/\s*ekwipunek\s*$/i, ""),
-          icon: o.icon,
-        }));
-      if (options.length) {
-        const payload = { updatedAt: Date.now(), holdings: options };
-        localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
-        try {
-          console.debug("[EJA] cached holdings", payload);
-        } catch {}
-      }
-    } catch {}
-  }
-
   const parseHoldingsFromJobsDocument = (doc) => {
     const holdings = [];
     const containers = doc.querySelectorAll(".holdings-container");
@@ -2682,7 +4026,9 @@
       const idMatch = href.match(/\/holding\/(\d+)/);
       if (!idMatch) return;
 
-      holdings.push({ id: idMatch[1], name, icon: "" });
+      const companyList = container.querySelector('.companyList[id^="companyList-"]');
+      const lazyUrl = companyList?.getAttribute("data-lazy-url") || "";
+      holdings.push({ id: idMatch[1], name, icon: "", lazyUrl });
     });
     const unique = new Map();
     holdings.forEach((h) => {
@@ -2834,50 +4180,6 @@
       });
     });
   }
-
-  const getCurrentEntityValue = (contextRoot) => {
-    const visible = contextRoot.querySelector(".storage-container-for-entity:not(.d-none)");
-    const val = visible && visible.getAttribute("data-entity");
-    if (val) return val;
-    const sel = contextRoot.querySelector("#inventory_selector");
-    return sel ? sel.value : "account";
-  };
-
-  const updateButton = (selectEl, contextRoot) => {
-    const val = getCurrentEntityValue(contextRoot);
-    const entity = parseEntity(val);
-
-    const buttons = Array.from(contextRoot.querySelectorAll("a.create-offer-btn")).filter(
-      (a) => !a.closest(".extra-buy-options"),
-    );
-    if (buttons.length === 0) return;
-    for (const btn of buttons) {
-      if (entity.scope === "holding") {
-        btn.setAttribute("data-scope", "holding");
-        if (entity.holdingid) {
-          btn.setAttribute("data-holdingid", entity.holdingid);
-        } else {
-          btn.removeAttribute("data-holdingid");
-        }
-      } else if (entity.scope === "public") {
-        btn.setAttribute("data-scope", "public");
-        btn.removeAttribute("data-holdingid");
-      } else if (entity.scope === "mu") {
-        btn.setAttribute("data-scope", "mu");
-        btn.removeAttribute("data-holdingid");
-      } else {
-        btn.setAttribute("data-scope", "self");
-        btn.removeAttribute("data-holdingid");
-      }
-    }
-  };
-
-  const removeExtraButtons = (contextRoot) => {
-    const toggle = contextRoot.querySelector(".extra-buy-toggle");
-    if (toggle && toggle.parentElement) toggle.parentElement.removeChild(toggle);
-    const extra = contextRoot.querySelector(".extra-buy-options");
-    if (extra && extra.parentElement) extra.parentElement.removeChild(extra);
-  };
 
   const COIN_ADVANCED_RECENT_KEY = "eja_coin_adv_recent_holdings";
   const COIN_ADVANCED_PINNED_KEY = "eja_coin_adv_pinned_holdings";
@@ -3508,8 +4810,9 @@
   const injectJobsActionButtons = (root = document) => {
     const existing = root.querySelector('[data-eja="jobs-action-buttons"]');
     const dashboardEnabled = isSettingEnabled("dashboardEnabled");
+    const payrollEnabled = isSettingEnabled("payrollListEnabled");
     const salesEnabled = isSettingEnabled("generateDailySalesSummaries");
-    if (!dashboardEnabled && !salesEnabled) {
+    if (!dashboardEnabled && !salesEnabled && !payrollEnabled) {
       if (existing) existing.remove();
       return;
     }
@@ -3527,6 +4830,20 @@
     if (!existing) {
       wrapper.setAttribute("data-eja", "jobs-action-buttons");
       wrapper.className = "d-flex align-items-center justify-content-end flex-wrap gap-2 mb-3";
+    }
+    if (payrollEnabled) {
+      const payrollBtn = document.createElement("button");
+      payrollBtn.type = "button";
+      payrollBtn.className = "btn btn-primary btn-sm mr-2";
+      payrollBtn.innerHTML = "🏭 Produkcja i płace";
+      payrollBtn.style.cssText = "background: linear-gradient(135deg, #8b5cf6, #7c3aed); border: none; font-weight: 600;";
+      payrollBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setActionButtonLoading(payrollBtn);
+        openPayrollOverlay(payrollBtn);
+      });
+      wrapper.appendChild(payrollBtn);
     }
     if (salesEnabled) {
       const salesBtn = document.createElement("button");
@@ -3628,6 +4945,7 @@
   const initJobsPageEnhancements = () => {
     if (document.__ejaJobsEnhancementsInit) return;
     document.__ejaJobsEnhancementsInit = true;
+    installJobsCompaniesApiInterceptors();
     waitFor(".holdings-container")
       .then(() => {
         const scheduleUpdate = debounce((mutations) => {
@@ -3659,59 +4977,12 @@
       .catch(() => {});
   };
 
-  const bind = (root) => {
-    const contextRoot = root || document;
-    const select = contextRoot.querySelector("#inventory_selector");
-    if (!select) return;
-    removeExtraButtons(contextRoot);
-    updateButton(select, contextRoot);
-    cacheHoldings(contextRoot);
-    if (!select.__ejaBound) {
-      select.__ejaBound = true;
-      select.addEventListener("change", () => updateButton(select, contextRoot));
-    }
-    const s2 = contextRoot.querySelector("#select2-inventory_selector-container");
-    if (s2 && !s2.__ejaObserved) {
-      s2.__ejaObserved = true;
-      const moSel = new MutationObserver(() => updateButton(select, contextRoot));
-      moSel.observe(s2.parentElement || s2, { attributes: true, attributeFilter: ["aria-activedescendant"] });
-    }
-    const containers = contextRoot.querySelectorAll(".storage-container-for-entity");
-    containers.forEach((c) => {
-      if (!c.__ejaObserved) {
-        c.__ejaObserved = true;
-        const moCont = new MutationObserver(() => updateButton(select, contextRoot));
-        moCont.observe(c, { attributes: true, attributeFilter: ["class"] });
-      }
-    });
-    const buttons = Array.from(contextRoot.querySelectorAll("a.create-offer-btn")).filter(
-      (a) => !a.closest(".extra-buy-options"),
-    );
-    buttons.forEach((btn) => {
-      if (!btn.__ejaClickBound) {
-        btn.__ejaClickBound = true;
-        btn.addEventListener("click", () => updateButton(select, contextRoot), { capture: true });
-      }
-    });
-  };
-
   const start = () => {
     initMarketSaleNotificationFilter();
     injectSettingsPanel();
+    installPayrollApiTokenInterceptor();
     if (isCoinAdvancedPage()) {
       initCoinAdvancedQuickBuy();
-    }
-    if (isSellPage() && isSettingEnabled("sellPageHelpers")) {
-      waitFor("#inventory_selector")
-        .then(() => bind(document))
-        .catch(() => {});
-      const scheduleBind = debounce(() => {
-        if (!isSellPage()) return;
-        bind(document);
-        cacheHoldings(document);
-      }, 150);
-      const mo = new MutationObserver(scheduleBind);
-      mo.observe(document.documentElement, { childList: true, subtree: true });
     }
     if (isSettingEnabled("addHoldingsToMenu")) {
       // Inject into global dropdown menu on all pages
@@ -3745,7 +5016,8 @@
       isJobsPage() &&
       (isSettingEnabled("jobsEnhancements") ||
         isSettingEnabled("dashboardEnabled") ||
-        isSettingEnabled("generateDailySalesSummaries"))
+        isSettingEnabled("generateDailySalesSummaries") ||
+        isSettingEnabled("payrollListEnabled"))
     ) {
       initJobsPageEnhancements();
     }
@@ -3773,9 +5045,9 @@
           <input type="checkbox" class="custom-control-input" id="eja-setting-dashboard" data-eja-setting="dashboardEnabled">
           <label class="custom-control-label" for="eja-setting-dashboard">Centrum Przedsiębiorcy</label>
         </div>
-        <div class="custom-control custom-switch mb-3">
-          <input type="checkbox" class="custom-control-input" id="eja-setting-sell" data-eja-setting="sellPageHelpers">
-          <label class="custom-control-label" for="eja-setting-sell">Proste sprzedawanie z wybranego magazynu na Głównym Rynku</label>
+        <div class="custom-control custom-switch mb-2">
+          <input type="checkbox" class="custom-control-input" id="eja-setting-payroll" data-eja-setting="payrollListEnabled">
+          <label class="custom-control-label" for="eja-setting-payroll">Produkcja i płace na /jobs</label>
         </div>
         <div class="custom-control custom-switch mb-3">
           <input type="checkbox" class="custom-control-input" id="eja-setting-coin-quick-buy" data-eja-setting="coinAdvancedQuickBuyHoldings">
